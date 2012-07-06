@@ -2,7 +2,7 @@ bl_info = {
     'name': "Import LDraw model format",
     'author': "Spencer Alves (impiaaa)",
     'version': (1,0),
-    'blender': (2, 6, 0),
+    'blender': (2, 6, 3),
     'api': 41226,
     'location': "File > Import > Import LDraw",
     'description': "This script imports LDraw model files.",
@@ -33,7 +33,6 @@ Changelog:
 
 import bpy, bpy.props, bpy.utils, mathutils
 import sys, os, math, time, warnings
-import dummy_threading as threading
 
 DEFAULTMAT = mathutils.Matrix.Scale(0.025, 4)
 DEFAULTMAT *= mathutils.Matrix.Rotation(math.pi/-2.0, 4, 'X') # -90 degree rotation
@@ -57,14 +56,14 @@ def whatsAfter(lookThrough, lookFor):
         if val == lookFor:
             return lookThrough[idx+1]
 
-def deepcopy(o, b=bpy):
+def deepcopy(o):
     # Copies and object AND all of its children. Links children to the current
     # scene, but not the parent.
     p = o.copy()
     if o in objectsInherit: objectsInherit.append(p)
     for c in o.children:
         d = deepcopy(c)
-        b.context.scene.objects.link(d)
+        bpy.context.scene.objects.link(d)
         d.parent = p
     return p
 
@@ -77,7 +76,7 @@ def applyMaterial(o, mat):
             applyMaterial(c, mat)
 
 def matrixEqual(a, b, threshold=THRESHOLD):
-    if a.row_size != b.row_size:
+    if len(a.col) != len(b.col):
         return False
     for i in range(len(a)):
         for j in range(len(a[i])):
@@ -100,7 +99,7 @@ class BFCContext(object):
 
 ### IMPORTER ###
 
-def lineType0(line, bfc, someObj=None, b=bpy):
+def lineType0(line, bfc, someObj=None):
     # Comment or meta-command
     if len(line) < 2:
         return
@@ -108,19 +107,19 @@ def lineType0(line, bfc, someObj=None, b=bpy):
         #Blender.Draw.PupMenu("Message in file:%t|"+(' '.join(line[2:])))
         pass
     elif line[1] == 'CLEAR':
-        b.ops.wm.redraw_timer()
+        bpy.ops.wm.redraw_timer()
     elif line[1] == 'PAUSE':
         #Blender.Draw.PupMenu("Paused.%t")
         pass
     elif line[1] == 'SAVE':
-        b.ops.render.render()
+        bpy.ops.render.render()
     elif line[1] == '!COLOUR':
         global MATERIALS
         name = line[2].strip()
-        if name in b.data.materials:
-            mat = b.data.materials[name]
+        if name in bpy.data.materials:
+            mat = bpy.data.materials[name]
         else:
-            mat = b.data.materials.new(name)
+            mat = bpy.data.materials.new(name)
         line = [s.upper() for s in line]
         MATERIALS[int(whatsAfter(line, 'CODE'))] = mat.name
         mat.game_settings.use_backface_culling = False # BFC not working ATM
@@ -264,26 +263,26 @@ def lineType0(line, bfc, someObj=None, b=bpy):
             elif option == "INVERTNEXT":
                  bfc.invertNext = True
 
-def lineType1(line, oldObj, oldMaterial, bfc, subfiles={}, b=bpy):
+def lineType1(line, oldObj, oldMaterial, bfc, subfiles={}):
     # File reference
     fname = line[-1].strip()
     newMatrix = mathutils.Matrix()
-    newMatrix[0] = [float(line[5]), float(line[8]),  float(line[11]), 0]
-    newMatrix[1] = [float(line[6]), float(line[9]),  float(line[12]), 0]
-    newMatrix[2] = [float(line[7]), float(line[10]), float(line[13]), 0]
-    newMatrix[3] = [float(line[2]), float(line[3]),  float(line[4]),  1]
+    newMatrix[0][:] = [float(line[ 5]), float(line[ 6]), float(line[ 7]), float(line[2])]
+    newMatrix[1][:] = [float(line[ 8]), float(line[ 9]), float(line[10]), float(line[3])]
+    newMatrix[2][:] = [float(line[11]), float(line[12]), float(line[13]), float(line[4])]
+    newMatrix[3][:] = [             0,              0,                 0,              1]
     materialId = int(line[1])
     if materialId in (16, 24):
         material = oldMaterial
     elif materialId in MATERIALS:
-        material = b.data.materials[MATERIALS[materialId]]
+        material = bpy.data.materials[MATERIALS[materialId]]
     else:
         material = None
     if fname.lower() in subfiles:
         newObj = readFile(fname, BFCContext(bfc), subfiles=subfiles, material=material)
     elif fname.lower() == 'light.dat' and USELIGHTS:
-        l = b.data.lamps.new(fname)
-        newObj = b.data.objects.new(fname, l)
+        l = bpy.data.lamps.new(fname)
+        newObj = bpy.data.objects.new(fname, l)
 
         l.color = material.diffuse_color
         l.energy = material.alpha
@@ -299,8 +298,8 @@ def lineType1(line, oldObj, oldMaterial, bfc, subfiles={}, b=bpy):
             fname.startswith('t1')) and\
            SMOOTH:
             newObj.select = True
-            b.context.scene.objects.active = newObj
-            b.ops.object.shade_smooth()
+            bpy.context.scene.objects.active = newObj
+            bpy.ops.object.shade_smooth()
             newObj.select = False
     if newObj:
         if materialId in (16, 24):
@@ -313,7 +312,7 @@ def lineType1(line, oldObj, oldMaterial, bfc, subfiles={}, b=bpy):
         if bfc.invertNext:
             #newObj.matrix_local = -1*newObj.matrix_local
             pass
-        b.context.scene.update()
+        bpy.context.scene.update()
         if not matrixEqual(newMatrix, newObj.matrix_local):
             warnings.warn("Object matrix has changed, model may have errors!")
     if bfc.invertNext:
@@ -345,7 +344,7 @@ def poly(line, m):
         f.vertices_raw[3] = f.vertices_raw[1]
         f.vertices_raw[1] = 0
 
-def readLine(line, o, material, bfc, subfiles={}, b=bpy):
+def readLine(line, o, material, bfc, subfiles={}):
     # Returns True if the file references any files or contains any polys;
     # otherwise, it is likely a header file and can be ignored.
     if len(line.strip()) == 0: return False
@@ -353,11 +352,11 @@ def readLine(line, o, material, bfc, subfiles={}, b=bpy):
     m = o.data
     if line[0] == '0':
         # Comment or meta-command
-        lineType0(line, bfc, b=b)
+        lineType0(line, bfc)
         return False
     elif line[0] == '1':
         # File reference
-        lineType1(line, o, material, bfc, subfiles=subfiles, b=b)
+        lineType1(line, o, material, bfc, subfiles=subfiles)
         return True
     elif line[0] in ('3', '4'):
         # Tri or quad (poly)
@@ -366,7 +365,7 @@ def readLine(line, o, material, bfc, subfiles={}, b=bpy):
         line[1] = int(line[1])
         if line[1] not in (16, 24):
             if line[1] in MATERIALS:
-                material = b.data.materials[MATERIALS[line[1]]]
+                material = bpy.data.materials[MATERIALS[line[1]]]
             else:
                 material = None
             slotIdx = -1
@@ -390,7 +389,7 @@ def readLine(line, o, material, bfc, subfiles={}, b=bpy):
         warnings.warn("Unknown linetype %s\n" % line[0])
         return False
 
-def readFile(fname, bfc, first=False, smooth=False, material=None, transform=False, subfiles={}, b=bpy):
+def readFile(fname, bfc, first=False, smooth=False, material=None, transform=False, subfiles={}):
     if fname.lower() in subfiles:
         # part of a multi-part
         import io
@@ -445,23 +444,23 @@ def readFile(fname, bfc, first=False, smooth=False, material=None, transform=Fal
                 f.seek(0)
                 subfiles[firstName] = f.read()
             f.close()
-            return readFile(firstName, bfc, first=first, smooth=smooth, material=material, transform=transform, subfiles=subfiles, b=b)
+            return readFile(firstName, bfc, first=first, smooth=smooth, material=material, transform=transform, subfiles=subfiles)
         
     mname = os.path.split(fname)[1]
-    if mname in b.data.objects:
+    if mname in bpy.data.objects:
         # We don't need to re-import a part if it's already in the file
-        obj = deepcopy(b.data.objects[mname],b=b)
-        b.context.scene.objects.link(obj)
+        obj = deepcopy(bpy.data.objects[mname])
+        bpy.context.scene.objects.link(obj)
         applyMaterial(obj, material)
         return obj
 
-    mesh = b.data.meshes.new(mname)
-    obj = b.data.objects.new(mname, mesh)
-    b.context.scene.objects.link(obj)
+    mesh = bpy.data.meshes.new(mname)
+    obj = bpy.data.objects.new(mname, mesh)
+    bpy.context.scene.objects.link(obj)
     
-    b.context.scene.objects.active = obj
+    bpy.context.scene.objects.active = obj
     obj.select = True
-    b.ops.object.material_slot_add()
+    bpy.ops.object.material_slot_add()
     obj.select = False
     obj.active_material_index = 0
     obj.material_slots[0].material = material
@@ -473,39 +472,21 @@ def readFile(fname, bfc, first=False, smooth=False, material=None, transform=Fal
         lines = f.readlines()
         f.close()
         total = float(len(lines))
-        threads = []
         for idx, line in enumerate(lines):
-            # I have a dream
-            # That maybe one day
-            # Blender could be multi-threaded
-            # And we could see our scripts
-            # Walk hand-in-hand with Python's threading module
-            # Or something like that...
-            threads.append(DummyThread(target=readLine, args=[line, obj, material, bfc], kwargs={"subfiles": subfiles, "b": b}))
-            threads[-1].start()
-        for t in threads:
-            t.join()
-            containsData = t.result or containsData
+            containsData = readLine(line, obj, material, bfc, subfiles=subfiles)
         if transform:
             obj.matrix_local = DEFAULTMAT
     else:
         for line in f:
-            containsData = readLine(line, obj, material, bfc, subfiles=subfiles, b=b) or containsData
+            containsData = readLine(line, obj, material, bfc, subfiles=subfiles) or containsData
     f.close()
     mesh.update()
     if not containsData:
         # This is to check for header files (like ldconfig.ldr)
-        b.context.scene.objects.unlink(obj)
-        b.data.objects.remove(obj)
+        bpy.context.scene.objects.unlink(obj)
+        bpy.data.objects.remove(obj)
         return None
     return obj
-
-class DummyThread(threading.Thread):
-    def __init__(self, *args, **kwargs):
-        threading.Thread.__init__(self, *args, **kwargs)
-        self.result = None
-    def run(self):
-        self.result = self._target(*self._args, **self._kwargs)
 
 def main(fname, context=None, transform=False):
     global MATERIALS, LDRAWDIR, GAPMAT, SMOOTH, HIRES, USELIGHTS
@@ -513,8 +494,8 @@ def main(fname, context=None, transform=False):
     start = time.time()
     IMPORTDIR = os.path.split(fname)[0]
     MATERIALS = {}
-    readFile(os.path.join(LDRAWDIR, "LDConfig.ldr"), BFCContext(), first=False, b=bpy)
-    readFile(fname, BFCContext(), first=True, transform=transform, b=bpy)
+    readFile(os.path.join(LDRAWDIR, "LDConfig.ldr"), BFCContext(), first=False)
+    readFile(fname, BFCContext(), first=True, transform=transform)
     context.scene.update()
     print('LDraw "{0}" imported in {1:.4} seconds.'.format(fname, time.time()-start))
 
@@ -527,8 +508,7 @@ class IMPORT_OT_ldraw(bpy.types.Operator):
 
     filepath= bpy.props.StringProperty(name="File Path", description="Filepath used for importing the LDR/DAT/MPD file", maxlen=MAXPATH, default="")
 
-    # I use a Mac, but I know the bulk of users will be win-slaves.
-    ldrawPathProp = bpy.props.StringProperty(name="LDraw directory", description="The directory in which the P and PARTS directories reside", maxlen=MAXPATH, default="C:\\Program Files\\LDraw")
+    ldrawPathProp = bpy.props.StringProperty(name="LDraw directory", description="The directory in which the P and PARTS directories reside", maxlen=MAXPATH, default={"win32": "C:\\Program Files\\LDraw", "darwin": "/Library/LDraw"}.get(sys.platform, "/opt/ldraw"))
     transformProp = bpy.props.BoolProperty(name="Transform", description="Transform objects to match Blender's coordinate system", default=True)
     smoothProp = bpy.props.BoolProperty(name="Smooth", description="Automatically shade round primitives (cyl, sph, con, tor) smooth", default=True)
     hiResProp = bpy.props.BoolProperty(name="Hi-Res prims", description="Force use of high-resolution primitives, if possible", default=False)
