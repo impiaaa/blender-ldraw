@@ -337,8 +337,8 @@ def poly(line, m):
             m.vertices[len(m.vertices)-1].co = vert
             vidx = len(m.vertices)-1
         indices += [vidx]
-    m.faces.add(1)
-    f = m.faces[len(m.faces)-1]
+    m.tessfaces.add(1)
+    f = m.tessfaces[len(m.tessfaces)-1]
     for i, vidx in enumerate(indices):
         f.vertices_raw[i] = vidx
     if line[0] > 3 and f.vertices_raw[3] == 0:
@@ -376,11 +376,11 @@ def readLine(line, o, material, bfc, subfiles={}, b=bpy):
                     break
             if slotIdx == -1:
                 m.materials.append(material)
-                m.faces[-1].material_index = len(o.material_slots)-1
+                m.tessfaces[-1].material_index = len(o.material_slots)-1
             else:
-                m.faces[-1].material_index = slotIdx
+                m.tessfaces[-1].material_index = slotIdx
         else:
-            m.faces[-1].material_index = 0
+            m.tessfaces[-1].material_index = 0
         return True
     elif line[0] in ('2', '5'):
         # Line and conditional line
@@ -404,7 +404,6 @@ def readFile(fname, bfc, first=False, smooth=False, material=None, transform=Fal
         hiResPath = os.path.join(LDRAWDIR, "P", "48", fname)
         if os.path.exists(fname):
             pass
-        elif os.path.exists(
         elif os.path.exists(ldrawPath):
             fname = ldrawPath
         elif os.path.exists(hiResPath) and HIRES:
