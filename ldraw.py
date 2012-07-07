@@ -473,7 +473,7 @@ def readFile(fname, bfc, first=False, smooth=False, material=None, transform=Fal
         f.close()
         total = float(len(lines))
         for idx, line in enumerate(lines):
-            containsData = readLine(line, obj, material, bfc, subfiles=subfiles)
+            containsData = readLine(line, obj, material, bfc, subfiles=subfiles) or containsData
         if transform:
             obj.matrix_local = DEFAULTMAT
     else:
