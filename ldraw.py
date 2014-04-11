@@ -101,6 +101,7 @@ class BFCContext(object):
 
 def lineType0(line, bfc, someObj=None):
     # Comment or meta-command
+    line = line.split()
     if len(line) < 2:
         return
     if line[1] in ('WRITE', 'PRINT'):
@@ -265,12 +266,16 @@ def lineType0(line, bfc, someObj=None):
 
 def lineType1(line, oldObj, oldMaterial, bfc, subfiles={}):
     # File reference
-    fname = line[-1].strip()
+    idx = 0
+    for i in range(14):
+        idx = line.find(' ', idx)+1
+    fname = line[idx:]
+    line = line.split()
     newMatrix = mathutils.Matrix()
     newMatrix[0][:] = [float(line[ 5]), float(line[ 6]), float(line[ 7]), float(line[2])]
     newMatrix[1][:] = [float(line[ 8]), float(line[ 9]), float(line[10]), float(line[3])]
     newMatrix[2][:] = [float(line[11]), float(line[12]), float(line[13]), float(line[4])]
-    newMatrix[3][:] = [             0,              0,                 0,              1]
+    newMatrix[3][:] = [           0.0,            0.0,               0.0,            1.0]
     materialId = int(line[1])
     if materialId in (16, 24):
         material = oldMaterial
@@ -296,7 +301,8 @@ def lineType1(line, oldObj, oldMaterial, bfc, subfiles={}):
             ('sph' in fname) or\
             fname.startswith('t0') or\
             fname.startswith('t1')) and\
-           SMOOTH:
+           SMOOTH and\
+           newObj:
             newObj.select = True
             bpy.context.scene.objects.active = newObj
             bpy.ops.object.shade_smooth()
@@ -347,19 +353,21 @@ def poly(line, m):
 def readLine(line, o, material, bfc, subfiles={}):
     # Returns True if the file references any files or contains any polys;
     # otherwise, it is likely a header file and can be ignored.
-    if len(line.strip()) == 0: return False
-    line = line.split()
+    line = line.strip()
+    if len(line) == 0: return False
+    command = line[:line.find(' ')]
     m = o.data
-    if line[0] == '0':
+    if command == '0':
         # Comment or meta-command
         lineType0(line, bfc)
         return False
-    elif line[0] == '1':
+    elif command == '1':
         # File reference
         lineType1(line, o, material, bfc, subfiles=subfiles)
         return True
-    elif line[0] in ('3', '4'):
+    elif command in ('3', '4'):
         # Tri or quad (poly)
+        line = line.split()
         poly(line, m)
         line[0] = int(line[0])
         line[1] = int(line[1])
@@ -381,12 +389,12 @@ def readLine(line, o, material, bfc, subfiles={}):
         else:
             m.tessfaces[-1].material_index = 0
         return True
-    elif line[0] in ('2', '5'):
+    elif command in ('2', '5'):
         # Line and conditional line
         # Not supported
         return False
     else:
-        warnings.warn("Unknown linetype %s\n" % line[0])
+        warnings.warn("Unknown linetype %s\n" % command)
         return False
 
 def readFile(fname, bfc, first=False, smooth=False, material=None, transform=False, subfiles={}):
@@ -396,25 +404,25 @@ def readFile(fname, bfc, first=False, smooth=False, material=None, transform=Fal
         f = io.StringIO(subfiles[fname.lower()])
     else:
         fname = fname.replace('\\', os.path.sep)
+        f = None
     
-        ldrawPath = os.path.join(LDRAWDIR, fname)
-        partsPath = os.path.join(LDRAWDIR, "PARTS", fname)
-        primitivesPath = os.path.join(LDRAWDIR, "P", fname)
-        hiResPath = os.path.join(LDRAWDIR, "P", "48", fname)
-        if os.path.exists(fname):
-            pass
-        elif os.path.exists(ldrawPath):
-            fname = ldrawPath
-        elif os.path.exists(hiResPath) and HIRES:
-            fname = hiResPath
-        elif os.path.exists(primitivesPath):
-            fname = primitivesPath
-        elif os.path.exists(partsPath):
-            fname = partsPath
-        else:
+        paths = [fname,
+                 os.path.join(LDRAWDIR, fname),
+                 os.path.join(LDRAWDIR, "PARTS", fname),
+                 os.path.join(LDRAWDIR, "P", fname),
+                 os.path.join(LDRAWDIR, "P", "48", fname),
+                 os.path.join(LDRAWDIR, "parts", fname),
+                 os.path.join(LDRAWDIR, "p", fname),
+                 os.path.join(LDRAWDIR, "p", "48", fname)]
+        
+        for path in paths:
+            if os.path.exists(path):
+                f = open(path, "rU")
+                break
+        
+        if f is None:
             warnings.warn("Could not find file %s" % fname)
             return
-        f = open(fname, "rU")
     
         if os.path.splitext(fname)[1].lower() in ('.mpd', '.ldr'):
             # multi-part!
@@ -508,7 +516,7 @@ class IMPORT_OT_ldraw(bpy.types.Operator):
 
     filepath= bpy.props.StringProperty(name="File Path", description="Filepath used for importing the LDR/DAT/MPD file", maxlen=MAXPATH, default="")
 
-    ldrawPathProp = bpy.props.StringProperty(name="LDraw directory", description="The directory in which the P and PARTS directories reside", maxlen=MAXPATH, default={"win32": "C:\\Program Files\\LDraw", "darwin": "/Library/LDraw"}.get(sys.platform, "/opt/ldraw"))
+    ldrawPathProp = bpy.props.StringProperty(name="LDraw directory", description="The directory in which the P and PARTS directories reside", maxlen=MAXPATH, default={"win32": "C:\\Program Files\\LDraw", "darwin": "/Library/LDraw"}.get(sys.platform, "/usr/share/ldraw"))
     transformProp = bpy.props.BoolProperty(name="Transform", description="Transform objects to match Blender's coordinate system", default=True)
     smoothProp = bpy.props.BoolProperty(name="Smooth", description="Automatically shade round primitives (cyl, sph, con, tor) smooth", default=True)
     hiResProp = bpy.props.BoolProperty(name="Hi-Res prims", description="Force use of high-resolution primitives, if possible", default=False)
