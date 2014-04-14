@@ -270,6 +270,7 @@ def lineType1(line, oldObj, oldMaterial, bfc, subfiles={}):
     for i in range(14):
         idx = line.find(' ', idx)+1
     fname = line[idx:]
+    lname = fname.lower()
     line = line.split()
     newMatrix = mathutils.Matrix()
     newMatrix[0][:] = [float(line[ 5]), float(line[ 6]), float(line[ 7]), float(line[2])]
@@ -283,9 +284,9 @@ def lineType1(line, oldObj, oldMaterial, bfc, subfiles={}):
         material = bpy.data.materials[MATERIALS[materialId]]
     else:
         material = None
-    if fname.lower() in subfiles:
+    if lname in subfiles:
         newObj = readFile(fname, BFCContext(bfc), subfiles=subfiles, material=material)
-    elif fname.lower() == 'light.dat' and USELIGHTS:
+    elif lname == 'light.dat' and USELIGHTS:
         l = bpy.data.lamps.new(fname)
         newObj = bpy.data.objects.new(fname, l)
 
@@ -295,12 +296,12 @@ def lineType1(line, oldObj, oldMaterial, bfc, subfiles={}):
         l.falloff_type = "CONSTANT"
     else:
         newObj = readFile(fname, BFCContext(bfc), material=material)
-        if ((('con' in fname) and
-             (not fname.startswith('con'))) or
-            ('cyl' in fname) or\
-            ('sph' in fname) or\
-            fname.startswith('t0') or\
-            fname.startswith('t1')) and\
+        if ((('con' in lname) and
+             (not lname.startswith('con'))) or
+            ('cyl' in lname) or\
+            ('sph' in lname) or\
+            lname.startswith('t0') or\
+            lname.startswith('t1')) and\
            SMOOTH and\
            newObj:
             newObj.select = True
@@ -311,14 +312,14 @@ def lineType1(line, oldObj, oldMaterial, bfc, subfiles={}):
         if materialId in (16, 24):
             objectsInherit.append(newObj)
         newObj.parent = oldObj
-        if os.path.exists(os.path.join(LDRAWDIR, "PARTS", fname)):
+        if os.path.exists(os.path.join(LDRAWDIR, "PARTS", fname)) or\
+           os.path.exists(os.path.join(LDRAWDIR, "parts", fname)):
             if not ((fname[0] in ('s', 'S')) and (fname[1] in ('/', '\\'))):
                 newMatrix *= GAPMAT
         newObj.matrix_local = newMatrix
         if bfc.invertNext:
             #newObj.matrix_local = -1*newObj.matrix_local
             pass
-        bpy.context.scene.update()
         if not matrixEqual(newMatrix, newObj.matrix_local):
             warnings.warn("Object matrix has changed, model may have errors!")
     if bfc.invertNext:
@@ -355,7 +356,7 @@ def readLine(line, o, material, bfc, subfiles={}):
     # otherwise, it is likely a header file and can be ignored.
     line = line.strip()
     if len(line) == 0: return False
-    command = line[:line.find(' ')]
+    command = line[:max(line.find(' '), 1)]
     m = o.data
     if command == '0':
         # Comment or meta-command
@@ -410,14 +411,15 @@ def readFile(fname, bfc, first=False, smooth=False, material=None, transform=Fal
                  os.path.join(LDRAWDIR, fname),
                  os.path.join(LDRAWDIR, "PARTS", fname),
                  os.path.join(LDRAWDIR, "P", fname),
-                 os.path.join(LDRAWDIR, "P", "48", fname),
-                 os.path.join(LDRAWDIR, "parts", fname),
-                 os.path.join(LDRAWDIR, "p", fname),
-                 os.path.join(LDRAWDIR, "p", "48", fname)]
+                 os.path.join(LDRAWDIR, "P", "48", fname)]
         
         for path in paths:
             if os.path.exists(path):
-                f = open(path, "rU")
+                f = open(path)
+                break
+            lpath = path.lower()
+            if os.path.exists(lpath):
+                f = open(lpath)
                 break
         
         if f is None:
@@ -553,16 +555,18 @@ def unregister():
      
 if __name__ == "__main__":
     register()
-    #LDRAWDIR = "/Library/LDraw"
     #import cProfile
+    #LDRAWDIR = "/Library/LDraw"
     #LDRAWDIR = "C:\\Program Files\\LDraw"
+    #LDRAWDIR = "/home/spencer/ldraw"
     #SMOOTH = True
     #HIRES = False
     #USELIGHTS = True
-    #gap = 0.01
+    #gap = 1.0/64.0
     #GAPMAT = mathutils.Matrix.Scale(1.0-gap, 4)
     #try:
-    #    main(os.path.join(LDRAWDIR, "Models", "pyramid.dat"), bpy.context, True)
+    #    cProfile.run('main(os.path.join(LDRAWDIR, "models", "pyramid.dat"), bpy.context, True)')
     #finally:
     #    sys.stderr.flush()
     #    sys.stdout.flush()
+
