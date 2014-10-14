@@ -531,18 +531,7 @@ class IMPORT_OT_ldraw(bpy.types.Operator):
         USELIGHTS = bool(self.lightProp)
         gap = float(self.scaleProp)
         GAPMAT = mathutils.Matrix.Scale(1.0-gap, 4)
-        
-        import cProfile, pstats, io
-        pr = cProfile.Profile()
-        pr.enable()
         main(self.filepath, context, transform)
-        pr.disable()
-        s = io.StringIO()
-        sortby = 'tottime'
-        ps = pstats.Stats(pr, stream=s).sort_stats(sortby)
-        ps.print_stats()
-        print(s.getvalue())
-        
         return {'FINISHED'}
 
     def invoke(self, context, event):
