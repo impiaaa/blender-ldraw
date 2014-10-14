@@ -56,24 +56,20 @@ def genDict(ls, keys):
             d[val] = ls[idx+1]
     return d
 
-def deepcopy(o):
+def copyAndApplyMaterial(o, mat):
     # Copies and object AND all of its children. Links children to the current
     # scene, but not the parent.
+    # Also recursively set mat to the 0 material slot.
     p = o.copy()
-    if o in objectsInherit: objectsInherit.append(p)
+    if o in objectsInherit:
+        objectsInherit.append(p)
+        if len(p.material_slots) > 0:
+            p.material_slots[0].material = mat
     for c in o.children:
-        d = deepcopy(c)
+        d = copyAndApplyMaterial(c, mat)
         bpy.context.scene.objects.link(d)
         d.parent = p
     return p
-
-def applyMaterial(o, mat):
-    # Recursively set mat to the 0 material slot.
-    if len(o.material_slots) > 0:
-        o.material_slots[0].material = mat
-    for c in o.children:
-        if c in objectsInherit:
-            applyMaterial(c, mat)
 
 def matrixEqual(a, b, threshold=THRESHOLD):
     if len(a.col) != len(b.col):
@@ -360,7 +356,10 @@ def readLine(line, o, material, bfc, bm, subfiles={}, readLater=None):
     elif command in ('3', '4'):
         # Tri or quad (poly)
         line = line.split()
-        newFace = poly(line, bm)
+        try: newFace = poly(line, bm)
+        except ValueError as e:
+            warnings.warn(e)
+            return True # for debugging, maybe?
         color = int(line[1])
         if color not in (16, 24):
             if color in MATERIALS:
@@ -450,9 +449,8 @@ def readFile(fname, bfc, first=False, smooth=False, material=None, transform=Fal
     mname = os.path.split(fname)[1]
     if mname in bpy.data.objects:
         # We don't need to re-import a part if it's already in the file
-        obj = deepcopy(bpy.data.objects[mname])
+        obj = copyAndApplyMaterial(bpy.data.objects[mname], material)
         bpy.context.scene.objects.link(obj)
-        applyMaterial(obj, material)
         return obj
 
     mesh = bpy.data.meshes.new(mname)
@@ -470,24 +468,25 @@ def readFile(fname, bfc, first=False, smooth=False, material=None, transform=Fal
     obj.active_material = material
 
     containsData = False
+    readLater = []
     if first:
         lines = f.readlines()
         f.close()
         total = float(len(lines))
         for idx, line in enumerate(lines):
-            containsData = readLine(line, obj, material, bfc, bm, subfiles=subfiles) or containsData
+            containsData = readLine(line, obj, material, bfc, bm, subfiles=subfiles, readLater=readLater) or containsData
         if transform:
             obj.matrix_local = DEFAULTMAT
+        del lines
     else:
-        readLater = []
         for line in f:
             containsData = readLine(line, obj, material, bfc, bm, subfiles=subfiles, readLater=readLater) or containsData
         f.close()
-        for args in readLater:
-            lineType1(*args)
     bm.to_mesh(mesh)
     bm.free()
     mesh.update()
+    for args in readLater:
+        lineType1(*args)
     if not containsData:
         # This is to check for header files (like ldconfig.ldr)
         bpy.context.scene.objects.unlink(obj)
@@ -531,7 +530,9 @@ class IMPORT_OT_ldraw(bpy.types.Operator):
         USELIGHTS = bool(self.lightProp)
         gap = float(self.scaleProp)
         GAPMAT = mathutils.Matrix.Scale(1.0-gap, 4)
+        
         main(self.filepath, context, transform)
+        
         return {'FINISHED'}
 
     def invoke(self, context, event):
