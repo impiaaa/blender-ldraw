@@ -31,13 +31,13 @@ Changelog:
         Initial re-release for Blender 2.60
 """
 
-import bpy, bpy.props, bpy.utils, mathutils
+import bpy, bpy.props, bpy.utils, mathutils, bmesh
 import sys, os, math, time, warnings
 
 DEFAULTMAT = mathutils.Matrix.Scale(0.025, 4)
 DEFAULTMAT *= mathutils.Matrix.Rotation(math.pi/-2.0, 4, 'X') # -90 degree rotation
 objectsInherit = [] # a list of part references (Blender objects) that inherit their color
-THRESHOLD = 0.001
+THRESHOLD = 0.0001
 CW = 0
 CCW = 1
 MAXPATH = 1024
@@ -47,14 +47,14 @@ IMPORTDIR = "C:\\"
 
 def hex2rgb(hexColor):
     if hexColor[0] == '#': hexColor = hexColor[1:]
-    elif hexColor[0:2].lower() == '0x': hexColor = hexColor[2:]
-    if len(hexColor) < 6: hexColor = hexColor[0]+'0'+hexColor[1]+'0'+hexColor[2]+'0'
     return int(hexColor[0:2], 16)/255.0, int(hexColor[2:4], 16)/255.0, int(hexColor[4:6], 16)/255.0
 
-def whatsAfter(lookThrough, lookFor):
-    for idx, val in enumerate(lookThrough):
-        if val == lookFor:
-            return lookThrough[idx+1]
+def genDict(ls, keys):
+    d = {}
+    for idx, val in enumerate(ls):
+        if val in keys:
+            d[val] = ls[idx+1]
+    return d
 
 def deepcopy(o):
     # Copies and object AND all of its children. Links children to the current
@@ -84,18 +84,26 @@ def matrixEqual(a, b, threshold=THRESHOLD):
     return True
 
 class BFCContext(object):
-    def __init__(self, other=None):
-        self.localCull = True
-        self.winding = CCW
-        self.invertNext = False
-        self.certified = None
-        if other != None and other.certified == True:
-            self.certified = True
-            self.accumCull = other.accumCull and other.localCull
-            self.accumInvert = other.accumInvert ^ other.invertNext
+    def __init__(self, other=None, copy=False):
+        if copy:
+            self.localCull = other.localCull
+            self.winding = other.winding
+            self.invertNext = other.invertNext
+            self.certified = other.certified
+            self.accumCull = other.accumCull
+            self.accumInvert = other.accumInvert
         else:
-            self.accumCull = False
-            self.accumInvert = False
+            self.localCull = True
+            self.winding = CCW
+            self.invertNext = False
+            self.certified = None
+            if other != None and other.certified == True:
+                self.certified = True
+                self.accumCull = other.accumCull and other.localCull
+                self.accumInvert = other.accumInvert ^ other.invertNext
+            else:
+                self.accumCull = False
+                self.accumInvert = False
 
 ### IMPORTER ###
 
@@ -122,24 +130,15 @@ def lineType0(line, bfc, someObj=None):
         else:
             mat = bpy.data.materials.new(name)
         line = [s.upper() for s in line]
-        MATERIALS[int(whatsAfter(line, 'CODE'))] = mat.name
+        lineDict = genDict(line, ['CODE', 'VALUE', 'ALPHA', 'LUMINANCE'])
+        MATERIALS[int(lineDict['CODE'])] = mat.name
         mat.game_settings.use_backface_culling = False # BFC not working ATM
-        value = whatsAfter(line, 'VALUE')
-        value = hex2rgb(value)
+        value = hex2rgb(lineDict['VALUE'])
         mat.diffuse_color = value
         # We can ignore the edge color value
-        alpha = whatsAfter(line, 'ALPHA')
-        if not alpha:
-            alpha = 255
-        else:
-            alpha = int(alpha)
+        alpha = int(lineDict.get('ALPHA', 255))
         mat.alpha = alpha/255.0
-        luminance = whatsAfter(line, 'LUMINANCE')
-        if not luminance:
-            luminance = 0
-        else:
-            luminance = int(luminance)
-        mat.emit = luminance/127.0
+        mat.emit = int(lineDict.get('LUMINANCE', 0))/127.0
         
         if "CHROME" in line:
             mat.ambient = 0.25
@@ -177,6 +176,7 @@ def lineType0(line, bfc, someObj=None):
             mat.specular_hardness = 292
         elif "MATERIAL" in line:
             materialLine = line[line.index("MATERIAL")+1:]
+            materialDict = genDict(materialLine, ['VALUE', 'FRACTION', 'SIZE', 'MINSIZE', 'MAXSIZE'])
             # Only these two are official, and they are nearly the same.
             if "GLITTER" in materialLine or "SPECKLE" in materialLine:
                 # I could use a particle system to make it more realistic,
@@ -186,25 +186,23 @@ def lineType0(line, bfc, someObj=None):
                     tex = bpy.data.textures[mat.name]
                 else:
                     tex = bpy.data.textures.new(mat.name, "STUCCI")
-                value = whatsAfter(materialLine, "VALUE")
-                value = hex2rgb(value)
+                value = hex2rgb(materialDict["VALUE"])
                 value = [v/255.0 for v in value]
                 # Alpha value is the same for the whole material, so the
                 # texture can "inherit" this value, but ignore luminance, since
                 # Blender textures only have color and transparency.
-                fraction = float(whatsAfter(materialLine, "FRACTION"))
+                fraction = float(materialDict["FRACTION"])
                 tex.use_color_ramp = True
                 tex.color_ramp.interpolation = "CONSTANT"
                 tex.color_ramp.elements[0].color = value+[alpha/255.0]
                 tex.color_ramp.elements[1].color = [0, 0, 0, 0]
                 tex.color_ramp.elements.new(fraction).color = value+[0]
-                size = whatsAfter(materialLine, "SIZE")
-                if not size:
+                if "SIZE" not in materialDict:
                     # Hmm.... I don't know what to do here.
-                    size = int(whatsAfter(materialLine, "MINSIZE"))+int(whatsAfter(materialLine, "MAXSIZE"))
+                    size = int(materialDict["MINSIZE"])+int(materialDict["MAXSIZE"])
                     size /= 2.0
                 else:
-                    size = float(size)
+                    size = float(materialDict["SIZE"])
                 size *= 0.025
                 tex.noise_scale = size
                 slot = mat.texture_slots.add()
@@ -239,7 +237,7 @@ def lineType0(line, bfc, someObj=None):
             mat.transparency_method = "RAYTRACE"
     
     elif line[1] == "BFC":
-        # http://ldraw.org/Article415.html
+        # http://www.ldraw.org/article/415
         if bfc.certified and "NOCERTIFY" not in line:
             bfc.certified = True
         for option in line[2:]:
@@ -276,7 +274,7 @@ def lineType1(line, oldObj, oldMaterial, bfc, subfiles={}):
     newMatrix[0][:] = [float(line[ 5]), float(line[ 6]), float(line[ 7]), float(line[2])]
     newMatrix[1][:] = [float(line[ 8]), float(line[ 9]), float(line[10]), float(line[3])]
     newMatrix[2][:] = [float(line[11]), float(line[12]), float(line[13]), float(line[4])]
-    newMatrix[3][:] = [           0.0,            0.0,               0.0,            1.0]
+    newMatrix[3][:] = [           0.0,              0.0,             0.0,            1.0]
     materialId = int(line[1])
     if materialId in (16, 24):
         material = oldMaterial
@@ -293,17 +291,17 @@ def lineType1(line, oldObj, oldMaterial, bfc, subfiles={}):
         l.color = material.diffuse_color
         l.energy = material.alpha
         l.shadow_method = "RAY_SHADOW"
-        l.falloff_type = "CONSTANT"
     else:
         newObj = readFile(fname, BFCContext(bfc), material=material)
-        if ((('con' in lname) and
+        if SMOOTH and\
+           newObj and\
+           ((('con' in lname) and
              (not lname.startswith('con'))) or
             ('cyl' in lname) or\
             ('sph' in lname) or\
             lname.startswith('t0') or\
-            lname.startswith('t1')) and\
-           SMOOTH and\
-           newObj:
+            lname.startswith('t1') or\
+            ('bump' in lname)):
             newObj.select = True
             bpy.context.scene.objects.active = newObj
             bpy.ops.object.shade_smooth()
@@ -322,59 +320,51 @@ def lineType1(line, oldObj, oldMaterial, bfc, subfiles={}):
             pass
         if not matrixEqual(newMatrix, newObj.matrix_local):
             warnings.warn("Object matrix has changed, model may have errors!")
-    if bfc.invertNext:
-        bfc.invertNext = False
 
-def poly(line, m):
+def poly(line, bm):
     # helper function for making polygons
     line = [float(i) for i in line]
-    indices = []
+    vertices = []
     for i in range(2, len(line), 3):
-        vert = (line[i], line[i+1], line[i+2])
-        vidx = -1
-        for j, v in enumerate(m.vertices):
-            if (abs(v.co[0]-vert[0]) < THRESHOLD)\
-               and (abs(v.co[1]-vert[1]) < THRESHOLD)\
-               and (abs(v.co[2]-vert[2]) < THRESHOLD):
-                vidx = j
+        newVert = mathutils.Vector((line[i], line[i+1], line[i+2]))
+        existingVert = None
+        for v in bm.verts:
+            if (abs(v.co[0]-newVert[0]) < THRESHOLD)\
+               and (abs(v.co[1]-newVert[1]) < THRESHOLD)\
+               and (abs(v.co[2]-newVert[2]) < THRESHOLD):
+                existingVert = v
                 break
-        if vidx == -1:
-            m.vertices.add(1)
-            m.vertices[len(m.vertices)-1].co = vert
-            vidx = len(m.vertices)-1
-        indices += [vidx]
-    m.tessfaces.add(1)
-    f = m.tessfaces[len(m.tessfaces)-1]
-    for i, vidx in enumerate(indices):
-        f.vertices_raw[i] = vidx
-    if line[0] > 3 and f.vertices_raw[3] == 0:
-        f.vertices_raw[3] = f.vertices_raw[1]
-        f.vertices_raw[1] = 0
+        if existingVert == None:
+            existingVert = bm.verts.new(newVert)
+        vertices.append(existingVert)
+    return bm.faces.new(vertices)
 
-def readLine(line, o, material, bfc, subfiles={}):
+def readLine(line, o, material, bfc, bm, subfiles={}, readLater=None):
     # Returns True if the file references any files or contains any polys;
     # otherwise, it is likely a header file and can be ignored.
     line = line.strip()
     if len(line) == 0: return False
     command = line[:max(line.find(' '), 1)]
-    m = o.data
     if command == '0':
         # Comment or meta-command
         lineType0(line, bfc)
         return False
     elif command == '1':
         # File reference
-        lineType1(line, o, material, bfc, subfiles=subfiles)
+        if readLater is None:
+            lineType1(line, o, material, bfc, subfiles=subfiles)
+        else:
+            readLater.append((line, o, material, BFCContext(bfc, True), subfiles))
+        bfc.invertNext = False
         return True
     elif command in ('3', '4'):
         # Tri or quad (poly)
         line = line.split()
-        poly(line, m)
-        line[0] = int(line[0])
-        line[1] = int(line[1])
-        if line[1] not in (16, 24):
-            if line[1] in MATERIALS:
-                material = bpy.data.materials[MATERIALS[line[1]]]
+        newFace = poly(line, bm)
+        color = int(line[1])
+        if color not in (16, 24):
+            if color in MATERIALS:
+                material = bpy.data.materials[MATERIALS[color]]
             else:
                 material = None
             slotIdx = -1
@@ -383,12 +373,12 @@ def readLine(line, o, material, bfc, subfiles={}):
                     slotIdx = i
                     break
             if slotIdx == -1:
-                m.materials.append(material)
-                m.tessfaces[-1].material_index = len(o.material_slots)-1
+                o.data.materials.append(material)
+                newFace.material_index = len(o.material_slots)-1
             else:
-                m.tessfaces[-1].material_index = slotIdx
+                newFace.material_index = slotIdx
         else:
-            m.tessfaces[-1].material_index = 0
+            newFace.material_index = 0
         return True
     elif command in ('2', '5'):
         # Line and conditional line
@@ -408,10 +398,11 @@ def readFile(fname, bfc, first=False, smooth=False, material=None, transform=Fal
         f = None
     
         paths = [fname,
-                 os.path.join(LDRAWDIR, fname),
                  os.path.join(LDRAWDIR, "PARTS", fname),
                  os.path.join(LDRAWDIR, "P", fname),
-                 os.path.join(LDRAWDIR, "P", "48", fname)]
+                 os.path.join(LDRAWDIR, "MODELS", fname)]
+        if HIRES:
+            paths.insert(2, os.path.join(LDRAWDIR, "P", "48", fname))
         
         for path in paths:
             if os.path.exists(path):
@@ -465,6 +456,7 @@ def readFile(fname, bfc, first=False, smooth=False, material=None, transform=Fal
         return obj
 
     mesh = bpy.data.meshes.new(mname)
+    bm = bmesh.new()
     obj = bpy.data.objects.new(mname, mesh)
     bpy.context.scene.objects.link(obj)
     
@@ -483,13 +475,18 @@ def readFile(fname, bfc, first=False, smooth=False, material=None, transform=Fal
         f.close()
         total = float(len(lines))
         for idx, line in enumerate(lines):
-            containsData = readLine(line, obj, material, bfc, subfiles=subfiles) or containsData
+            containsData = readLine(line, obj, material, bfc, bm, subfiles=subfiles) or containsData
         if transform:
             obj.matrix_local = DEFAULTMAT
     else:
+        readLater = []
         for line in f:
-            containsData = readLine(line, obj, material, bfc, subfiles=subfiles) or containsData
-    f.close()
+            containsData = readLine(line, obj, material, bfc, bm, subfiles=subfiles, readLater=readLater) or containsData
+        f.close()
+        for args in readLater:
+            lineType1(*args)
+    bm.to_mesh(mesh)
+    bm.free()
     mesh.update()
     if not containsData:
         # This is to check for header files (like ldconfig.ldr)
@@ -534,7 +531,18 @@ class IMPORT_OT_ldraw(bpy.types.Operator):
         USELIGHTS = bool(self.lightProp)
         gap = float(self.scaleProp)
         GAPMAT = mathutils.Matrix.Scale(1.0-gap, 4)
+        
+        import cProfile, pstats, io
+        pr = cProfile.Profile()
+        pr.enable()
         main(self.filepath, context, transform)
+        pr.disable()
+        s = io.StringIO()
+        sortby = 'tottime'
+        ps = pstats.Stats(pr, stream=s).sort_stats(sortby)
+        ps.print_stats()
+        print(s.getvalue())
+        
         return {'FINISHED'}
 
     def invoke(self, context, event):
@@ -543,7 +551,7 @@ class IMPORT_OT_ldraw(bpy.types.Operator):
 
 
 def menu_import(self, context):
-    self.layout.operator(IMPORT_OT_ldraw.bl_idname, text="LDraw Model (.dat)")
+    self.layout.operator(IMPORT_OT_ldraw.bl_idname, text="LDraw Model (.dat, .mpd, .ldr)")
 
 def register(): 
     bpy.utils.register_module(__name__) 
@@ -569,4 +577,3 @@ if __name__ == "__main__":
     #finally:
     #    sys.stderr.flush()
     #    sys.stdout.flush()
-
