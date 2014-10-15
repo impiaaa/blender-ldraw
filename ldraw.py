@@ -64,6 +64,11 @@ def copyAndApplyMaterial(o, mat):
         p.ldrawInheritsColor = True
         if len(p.material_slots) > 0:
             p.material_slots[0].material = mat
+        else:
+            p.active_material_index = 0
+            p.active_material = mat
+            p.material_slots[0].link = 'OBJECT'
+            p.active_material = mat
     for c in o.children:
         d = copyAndApplyMaterial(c, mat)
         bpy.context.scene.objects.link(d)
@@ -459,6 +464,10 @@ def readFile(fname, bfc, first=False, smooth=False, material=None, transform=Fal
     if mname in bpy.data.objects:
         # We don't need to re-import a part if it's already in the file
         obj = copyAndApplyMaterial(bpy.data.objects[mname], material)
+        obj.active_material_index = 0
+        obj.active_material = material
+        obj.material_slots[0].link = 'OBJECT'
+        obj.active_material = material
         bpy.context.scene.objects.link(obj)
         return obj
 
