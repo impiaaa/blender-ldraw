@@ -36,7 +36,6 @@ import sys, os, math, time, warnings
 
 DEFAULTMAT = mathutils.Matrix.Scale(0.025, 4)
 DEFAULTMAT *= mathutils.Matrix.Rotation(math.pi/-2.0, 4, 'X') # -90 degree rotation
-objectsInherit = [] # a list of part references (Blender objects) that inherit their color
 THRESHOLD = 0.0001
 CW = 0
 CCW = 1
@@ -61,8 +60,8 @@ def copyAndApplyMaterial(o, mat):
     # scene, but not the parent.
     # Also recursively set mat to the 0 material slot.
     p = o.copy()
-    if o in objectsInherit:
-        objectsInherit.append(p)
+    if o.ldrawInheritsColor:
+        p.ldrawInheritsColor = True
         if len(p.material_slots) > 0:
             p.material_slots[0].material = mat
     for c in o.children:
@@ -101,6 +100,12 @@ class BFCContext(object):
                 self.accumCull = False
                 self.accumInvert = False
 
+def setMeshSmooth(me):
+    for mp in me.polygons:
+        mp.use_smooth = True
+    for mf in me.tessfaces:
+        mf.use_smooth = True
+
 ### IMPORTER ###
 
 def lineType0(line, bfc, someObj=None):
@@ -112,12 +117,14 @@ def lineType0(line, bfc, someObj=None):
         #Blender.Draw.PupMenu("Message in file:%t|"+(' '.join(line[2:])))
         pass
     elif line[1] == 'CLEAR':
-        bpy.ops.wm.redraw_timer()
+        #bpy.ops.wm.redraw_timer()
+        pass
     elif line[1] == 'PAUSE':
         #Blender.Draw.PupMenu("Paused.%t")
         pass
     elif line[1] == 'SAVE':
-        bpy.ops.render.render()
+        #bpy.ops.render.render()
+        pass
     elif line[1] == '!COLOUR':
         global MATERIALS
         name = line[2].strip()
@@ -298,13 +305,15 @@ def lineType1(line, oldObj, oldMaterial, bfc, subfiles={}):
             lname.startswith('t0') or\
             lname.startswith('t1') or\
             ('bump' in lname)):
-            newObj.select = True
-            bpy.context.scene.objects.active = newObj
-            bpy.ops.object.shade_smooth()
-            newObj.select = False
+            
+            setMeshSmooth(newObj.data)
+            
+            # Old method - the loop is probably faster (being written in C), but it
+            # causes a scene update after
+            #bpy.ops.object.shade_smooth()
     if newObj:
         if materialId in (16, 24):
-            objectsInherit.append(newObj)
+            newObj.ldrawInheritsColor = True
         newObj.parent = oldObj
         if os.path.exists(os.path.join(LDRAWDIR, "PARTS", fname)) or\
            os.path.exists(os.path.join(LDRAWDIR, "parts", fname)):
@@ -458,12 +467,8 @@ def readFile(fname, bfc, first=False, smooth=False, material=None, transform=Fal
     obj = bpy.data.objects.new(mname, mesh)
     bpy.context.scene.objects.link(obj)
     
-    bpy.context.scene.objects.active = obj
-    obj.select = True
-    bpy.ops.object.material_slot_add()
-    obj.select = False
     obj.active_material_index = 0
-    obj.material_slots[0].material = material
+    obj.active_material = material
     obj.material_slots[0].link = 'OBJECT'
     obj.active_material = material
 
@@ -472,8 +477,9 @@ def readFile(fname, bfc, first=False, smooth=False, material=None, transform=Fal
     if first:
         lines = f.readlines()
         f.close()
-        total = float(len(lines))
+        total = len(lines)
         for idx, line in enumerate(lines):
+            print("Processing line {0}/{1}".format(idx, total))
             containsData = readLine(line, obj, material, bfc, bm, subfiles=subfiles, readLater=readLater) or containsData
         if transform:
             obj.matrix_local = DEFAULTMAT
@@ -530,9 +536,7 @@ class IMPORT_OT_ldraw(bpy.types.Operator):
         USELIGHTS = bool(self.lightProp)
         gap = float(self.scaleProp)
         GAPMAT = mathutils.Matrix.Scale(1.0-gap, 4)
-        
         main(self.filepath, context, transform)
-        
         return {'FINISHED'}
 
     def invoke(self, context, event):
@@ -546,10 +550,12 @@ def menu_import(self, context):
 def register(): 
     bpy.utils.register_module(__name__) 
     bpy.types.INFO_MT_file_import.append(menu_import)
+    bpy.types.Object.ldrawInheritsColor = bpy.props.BoolProperty()
      
 def unregister():
     bpy.utils.unregister_module(__name__) 
     bpy.types.INFO_MT_file_import.remove(menu_import)
+    del bpy.types.Object.ldrawInheritsColor
      
 if __name__ == "__main__":
     register()
