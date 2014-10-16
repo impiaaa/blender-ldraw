@@ -2,8 +2,7 @@ bl_info = {
     'name': "Import LDraw model format",
     'author': "Spencer Alves (impiaaa)",
     'version': (1,0),
-    'blender': (2, 6, 3),
-    'api': 41226,
+    'blender': (2, 70, 0),
     'location': "File > Import > Import LDraw",
     'description': "This script imports LDraw model files.",
     'warning': "Some parts may be distorted", # used for warning icon and text in addons panel
@@ -119,7 +118,9 @@ def createMaterial(name, line, lineDict):
         mat = bpy.data.materials[name]
     else:
         mat = bpy.data.materials.new(name)
-    MATERIALS[int(lineDict['CODE'])] = mat.name
+    materialId = lineDict['CODE']
+    if materialId.isdigit(): materialId = int(materialId)
+    MATERIALS[materialId] = mat.name
     mat.game_settings.use_backface_culling = False # BFC not working ATM
     value = hex2rgb(lineDict['VALUE'])
     mat.diffuse_color = value
@@ -289,7 +290,7 @@ def colorReference(s):
         if s in MATERIALS:
             return None, bpy.data.materials[MATERIALS[s]]
         else:
-            return None, createMaterial(s, [], {"VALUE": hex2rgb(s[3:])})
+            return None, createMaterial(s, [], {"VALUE": s[3:], "CODE": s})
     else:
         warnings.warn("Malformed color reference: {0}".format(s))
     return None, None
@@ -337,10 +338,9 @@ def lineType1(line, oldObj, oldMaterial, bfc, subfiles={}):
 
 def poly(line, bm):
     # helper function for making polygons
-    line = [float(i) for i in line]
     vertices = []
-    for i in range(2, len(line), 3):
-        newVert = mathutils.Vector((line[i], line[i+1], line[i+2]))
+    for i in range(0, len(line), 3):
+        newVert = mathutils.Vector((float(line[i]), float(line[i+1]), float(line[i+2])))
         #existingVert = None
         #for v in bm.verts:
         #    if (abs(v.co[0]-newVert[0]) < THRESHOLD)\
@@ -374,7 +374,7 @@ def readLine(line, o, material, bfc, bm, subfiles={}, readLater=None):
     elif command in ('3', '4'):
         # Tri or quad (poly)
         line = line.split()
-        try: newFace = poly(line, bm)
+        try: newFace = poly(line[2:], bm)
         except ValueError as e:
             warnings.warn(e)
             return True # for debugging, maybe?
