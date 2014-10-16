@@ -40,7 +40,7 @@ THRESHOLD = 0.0001
 CW = 0
 CCW = 1
 MAXPATH = 1024
-IMPORTDIR = "C:\\"
+LOWRES = False
 
 ### UTILITY FUNCTIONS ###
 
@@ -69,6 +69,8 @@ def copyAndApplyMaterial(o, mat):
             p.active_material = mat
             p.material_slots[0].link = 'OBJECT'
             p.active_material = mat
+    # This loop is REALLY SLOW for large scenes, since .children iterates through
+    # every object in the scene
     for c in o.children:
         d = copyAndApplyMaterial(c, mat)
         bpy.context.scene.objects.link(d)
@@ -106,12 +108,123 @@ class BFCContext(object):
                 self.accumInvert = False
 
 def setMeshSmooth(me):
-    for mp in me.polygons:
-        mp.use_smooth = True
-    for mf in me.tessfaces:
-        mf.use_smooth = True
+    for mp in me.faces:
+        mp.smooth = True
 
 ### IMPORTER ###
+
+def createMaterial(name, line, lineDict):
+    global MATERIALS
+    if name in bpy.data.materials:
+        mat = bpy.data.materials[name]
+    else:
+        mat = bpy.data.materials.new(name)
+    MATERIALS[int(lineDict['CODE'])] = mat.name
+    mat.game_settings.use_backface_culling = False # BFC not working ATM
+    value = hex2rgb(lineDict['VALUE'])
+    mat.diffuse_color = value
+    # We can ignore the edge color value
+    alpha = int(lineDict.get('ALPHA', 255))
+    mat.alpha = alpha/255.0
+    mat.emit = int(lineDict.get('LUMINANCE', 0))/127.0
+    
+    if "CHROME" in line:
+        mat.ambient = 0.25
+        mat.diffuse_intensity = 0.6
+        mat.raytrace_mirror.use = True
+        mat.specular_intensity = 1.4
+        mat.roughness = 0.01
+        mat.raytrace_mirror.reflect_factor = 0.3
+    elif "PEARLESCENT" in line:
+        mat.ambient = 0.22
+        mat.diffuse_intensity = 0.6
+        mat.raytrace_mirror.use = True
+        mat.specular_intensity = 0.1
+        mat.roughness = 0.32
+        mat.raytrace_mirror.reflect_factor = 0.07
+    elif "RUBBER" in line:
+        mat.ambient = 0.5
+        mat.specular_intensity = 0.19
+        mat.specular_slope = 0.235
+        mat.diffuse_intensity = 0.6
+    elif "MATTE_METALLIC" in line:
+        mat.raytrace_mirror.use = True
+        mat.raytrace_mirror.reflect_factor = 0.84
+        mat.diffuse_intensity = 0.844
+        mat.specular_intensity = 0.5
+        mat.specular_hardness = 40
+        mat.gloss_factor = 0.725
+    elif "METAL" in line:
+        mat.raytrace_mirror.use = True
+        mat.raytrace_mirror.reflect_factor = 0.9
+        mat.diffuse_fresnel = 0.93
+        mat.diffuse_intensity = 1.0
+        mat.darkness = 0.771
+        mat.specular_intensity = 1.473
+        mat.specular_hardness = 292
+    elif "MATERIAL" in line:
+        materialLine = line[line.index("MATERIAL")+1:]
+        materialDict = genDict(materialLine, ['VALUE', 'FRACTION', 'SIZE', 'MINSIZE', 'MAXSIZE'])
+        # Only these two are official, and they are nearly the same.
+        if "GLITTER" in materialLine or "SPECKLE" in materialLine:
+            # I could use a particle system to make it more realistic,
+            # but it would be VERY slow. Use procedural texture for now.
+            # TODO There has to be a better way.
+            if mat.name in bpy.data.textures:
+                tex = bpy.data.textures[mat.name]
+            else:
+                tex = bpy.data.textures.new(mat.name, "STUCCI")
+            value = hex2rgb(materialDict["VALUE"])
+            value = [v/255.0 for v in value]
+            # Alpha value is the same for the whole material, so the
+            # texture can "inherit" this value, but ignore luminance, since
+            # Blender textures only have color and transparency.
+            fraction = float(materialDict["FRACTION"])
+            tex.use_color_ramp = True
+            tex.color_ramp.interpolation = "CONSTANT"
+            tex.color_ramp.elements[0].color = value+[alpha/255.0]
+            tex.color_ramp.elements[1].color = [0, 0, 0, 0]
+            tex.color_ramp.elements.new(fraction).color = value+[0]
+            if "SIZE" not in materialDict:
+                # Hmm.... I don't know what to do here.
+                size = int(materialDict["MINSIZE"])+int(materialDict["MAXSIZE"])
+                size /= 2.0
+            else:
+                size = float(materialDict["SIZE"])
+            size *= 0.025
+            tex.noise_scale = size
+            slot = mat.texture_slots.add()
+            slot.texture = tex
+            mat.use_textures[0] = True
+            
+        if alpha < 255:
+            mat.raytrace_mirror.use = True
+            mat.ambient = 0.3
+            mat.diffuse_intensity = 0.8
+            mat.raytrace_mirror.reflect_factor = 0.1
+            mat.specular_intensity = 0.3
+            mat.raytrace_transparency.ior = 1.40
+        else:
+            mat.ambient = 0.1
+            mat.specular_intensity = 0.2
+            
+    elif alpha < 255:
+        mat.raytrace_mirror.use = True
+        mat.ambient = 0.3
+        mat.diffuse_intensity = 0.8
+        mat.raytrace_mirror.reflect_factor = 0.1
+        mat.specular_intensity = 0.3
+        mat.raytrace_transparency.ior = 1.40
+    else:
+        mat.ambient = 0.1
+        mat.specular_intensity = 0.2
+        mat.diffuse_intensity = 1.0
+
+    if alpha < 255:
+        mat.use_transparency = True
+        mat.transparency_method = "RAYTRACE"
+    
+    return mat
 
 def lineType0(line, bfc, someObj=None):
     # Comment or meta-command
@@ -131,118 +244,10 @@ def lineType0(line, bfc, someObj=None):
         #bpy.ops.render.render()
         pass
     elif line[1] == '!COLOUR':
-        global MATERIALS
         name = line[2].strip()
-        if name in bpy.data.materials:
-            mat = bpy.data.materials[name]
-        else:
-            mat = bpy.data.materials.new(name)
         line = [s.upper() for s in line]
         lineDict = genDict(line, ['CODE', 'VALUE', 'ALPHA', 'LUMINANCE'])
-        MATERIALS[int(lineDict['CODE'])] = mat.name
-        mat.game_settings.use_backface_culling = False # BFC not working ATM
-        value = hex2rgb(lineDict['VALUE'])
-        mat.diffuse_color = value
-        # We can ignore the edge color value
-        alpha = int(lineDict.get('ALPHA', 255))
-        mat.alpha = alpha/255.0
-        mat.emit = int(lineDict.get('LUMINANCE', 0))/127.0
-        
-        if "CHROME" in line:
-            mat.ambient = 0.25
-            mat.diffuse_intensity = 0.6
-            mat.raytrace_mirror.use = True
-            mat.specular_intensity = 1.4
-            mat.roughness = 0.01
-            mat.raytrace_mirror.reflect_factor = 0.3
-        elif "PEARLESCENT" in line:
-            mat.ambient = 0.22
-            mat.diffuse_intensity = 0.6
-            mat.raytrace_mirror.use = True
-            mat.specular_intensity = 0.1
-            mat.roughness = 0.32
-            mat.raytrace_mirror.reflect_factor = 0.07
-        elif "RUBBER" in line:
-            mat.ambient = 0.5
-            mat.specular_intensity = 0.19
-            mat.specular_slope = 0.235
-            mat.diffuse_intensity = 0.6
-        elif "MATTE_METALLIC" in line:
-            mat.raytrace_mirror.use = True
-            mat.raytrace_mirror.reflect_factor = 0.84
-            mat.diffuse_intensity = 0.844
-            mat.specular_intensity = 0.5
-            mat.specular_hardness = 40
-            mat.gloss_factor = 0.725
-        elif "METAL" in line:
-            mat.raytrace_mirror.use = True
-            mat.raytrace_mirror.reflect_factor = 0.9
-            mat.diffuse_fresnel = 0.93
-            mat.diffuse_intensity = 1.0
-            mat.darkness = 0.771
-            mat.specular_intensity = 1.473
-            mat.specular_hardness = 292
-        elif "MATERIAL" in line:
-            materialLine = line[line.index("MATERIAL")+1:]
-            materialDict = genDict(materialLine, ['VALUE', 'FRACTION', 'SIZE', 'MINSIZE', 'MAXSIZE'])
-            # Only these two are official, and they are nearly the same.
-            if "GLITTER" in materialLine or "SPECKLE" in materialLine:
-                # I could use a particle system to make it more realistic,
-                # but it would be VERY slow. Use procedural texture for now.
-                # TODO There has to be a better way.
-                if mat.name in bpy.data.textures:
-                    tex = bpy.data.textures[mat.name]
-                else:
-                    tex = bpy.data.textures.new(mat.name, "STUCCI")
-                value = hex2rgb(materialDict["VALUE"])
-                value = [v/255.0 for v in value]
-                # Alpha value is the same for the whole material, so the
-                # texture can "inherit" this value, but ignore luminance, since
-                # Blender textures only have color and transparency.
-                fraction = float(materialDict["FRACTION"])
-                tex.use_color_ramp = True
-                tex.color_ramp.interpolation = "CONSTANT"
-                tex.color_ramp.elements[0].color = value+[alpha/255.0]
-                tex.color_ramp.elements[1].color = [0, 0, 0, 0]
-                tex.color_ramp.elements.new(fraction).color = value+[0]
-                if "SIZE" not in materialDict:
-                    # Hmm.... I don't know what to do here.
-                    size = int(materialDict["MINSIZE"])+int(materialDict["MAXSIZE"])
-                    size /= 2.0
-                else:
-                    size = float(materialDict["SIZE"])
-                size *= 0.025
-                tex.noise_scale = size
-                slot = mat.texture_slots.add()
-                slot.texture = tex
-                mat.use_textures[0] = True
-                
-            if alpha < 255:
-                mat.raytrace_mirror.use = True
-                mat.ambient = 0.3
-                mat.diffuse_intensity = 0.8
-                mat.raytrace_mirror.reflect_factor = 0.1
-                mat.specular_intensity = 0.3
-                mat.raytrace_transparency.ior = 1.40
-            else:
-                mat.ambient = 0.1
-                mat.specular_intensity = 0.2
-                
-        elif alpha < 255:
-            mat.raytrace_mirror.use = True
-            mat.ambient = 0.3
-            mat.diffuse_intensity = 0.8
-            mat.raytrace_mirror.reflect_factor = 0.1
-            mat.specular_intensity = 0.3
-            mat.raytrace_transparency.ior = 1.40
-        else:
-            mat.ambient = 0.1
-            mat.specular_intensity = 0.2
-            mat.diffuse_intensity = 1.0
-
-        if alpha < 255:
-            mat.use_transparency = True
-            mat.transparency_method = "RAYTRACE"
+        createMaterial(name, line, lineDict)
     
     elif line[1] == "BFC":
         # http://www.ldraw.org/article/415
@@ -270,6 +275,25 @@ def lineType0(line, bfc, someObj=None):
             elif option == "INVERTNEXT":
                  bfc.invertNext = True
 
+def colorReference(s):
+    if s.isdigit():
+        materialId = int(s)
+        if materialId in (16, 24):
+            return materialId, None
+        elif materialId in MATERIALS:
+            return materialId, bpy.data.materials[MATERIALS[materialId]]
+        else:
+            warnings.warn("Undefined color {0}".format(materialId))
+    elif s.startswith("0x2"):
+        # Direct color
+        if s in MATERIALS:
+            return None, bpy.data.materials[MATERIALS[s]]
+        else:
+            return None, createMaterial(s, [], {"VALUE": hex2rgb(s[3:])})
+    else:
+        warnings.warn("Malformed color reference: {0}".format(s))
+    return None, None
+
 def lineType1(line, oldObj, oldMaterial, bfc, subfiles={}):
     # File reference
     idx = 0
@@ -283,13 +307,8 @@ def lineType1(line, oldObj, oldMaterial, bfc, subfiles={}):
     newMatrix[1][:] = [float(line[ 8]), float(line[ 9]), float(line[10]), float(line[3])]
     newMatrix[2][:] = [float(line[11]), float(line[12]), float(line[13]), float(line[4])]
     newMatrix[3][:] = [           0.0,              0.0,             0.0,            1.0]
-    materialId = int(line[1])
-    if materialId in (16, 24):
-        material = oldMaterial
-    elif materialId in MATERIALS:
-        material = bpy.data.materials[MATERIALS[materialId]]
-    else:
-        material = None
+    materialId, material = colorReference(line[1])
+    if materialId in (16, 24): material = oldMaterial
     if lname in subfiles:
         newObj = readFile(fname, BFCContext(bfc), subfiles=subfiles, material=material)
     elif lname == 'light.dat' and USELIGHTS:
@@ -301,21 +320,6 @@ def lineType1(line, oldObj, oldMaterial, bfc, subfiles={}):
         l.shadow_method = "RAY_SHADOW"
     else:
         newObj = readFile(fname, BFCContext(bfc), material=material)
-        if SMOOTH and\
-           newObj and\
-           ((('con' in lname) and
-             (not lname.startswith('con'))) or
-            ('cyl' in lname) or\
-            ('sph' in lname) or\
-            lname.startswith('t0') or\
-            lname.startswith('t1') or\
-            ('bump' in lname)):
-            
-            setMeshSmooth(newObj.data)
-            
-            # Old method - the loop is probably faster (being written in C), but it
-            # causes a scene update after
-            #bpy.ops.object.shade_smooth()
     if newObj:
         if materialId in (16, 24):
             newObj.ldrawInheritsColor = True
@@ -337,15 +341,15 @@ def poly(line, bm):
     vertices = []
     for i in range(2, len(line), 3):
         newVert = mathutils.Vector((line[i], line[i+1], line[i+2]))
-        existingVert = None
-        for v in bm.verts:
-            if (abs(v.co[0]-newVert[0]) < THRESHOLD)\
-               and (abs(v.co[1]-newVert[1]) < THRESHOLD)\
-               and (abs(v.co[2]-newVert[2]) < THRESHOLD):
-                existingVert = v
-                break
-        if existingVert == None:
-            existingVert = bm.verts.new(newVert)
+        #existingVert = None
+        #for v in bm.verts:
+        #    if (abs(v.co[0]-newVert[0]) < THRESHOLD)\
+        #       and (abs(v.co[1]-newVert[1]) < THRESHOLD)\
+        #       and (abs(v.co[2]-newVert[2]) < THRESHOLD):
+        #        existingVert = v
+        #        break
+        #if existingVert == None:
+        existingVert = bm.verts.new(newVert)
         vertices.append(existingVert)
     return bm.faces.new(vertices)
 
@@ -374,19 +378,15 @@ def readLine(line, o, material, bfc, bm, subfiles={}, readLater=None):
         except ValueError as e:
             warnings.warn(e)
             return True # for debugging, maybe?
-        color = int(line[1])
+        color, faceMat = colorReference(line[1])
         if color not in (16, 24):
-            if color in MATERIALS:
-                material = bpy.data.materials[MATERIALS[color]]
-            else:
-                material = None
             slotIdx = -1
             for i, matSlot in enumerate(o.material_slots):
-                if matSlot.material == material and matSlot.link == "DATA":
+                if matSlot.material == faceMat and matSlot.link == "DATA":
                     slotIdx = i
                     break
             if slotIdx == -1:
-                o.data.materials.append(material)
+                o.data.materials.append(faceMat)
                 newFace.material_index = len(o.material_slots)-1
             else:
                 newFace.material_index = slotIdx
@@ -416,6 +416,8 @@ def readFile(fname, bfc, first=False, smooth=False, material=None, transform=Fal
                  os.path.join(LDRAWDIR, "MODELS", fname)]
         if HIRES:
             paths.insert(2, os.path.join(LDRAWDIR, "P", "48", fname))
+        if LOWRES:
+            paths.insert(2, os.path.join(LDRAWDIR, "P", "8", fname))
         
         for path in paths:
             if os.path.exists(path):
@@ -497,6 +499,25 @@ def readFile(fname, bfc, first=False, smooth=False, material=None, transform=Fal
         for line in f:
             containsData = readLine(line, obj, material, bfc, bm, subfiles=subfiles, readLater=readLater) or containsData
         f.close()
+    
+    lname = fname.lower()
+    if SMOOTH and\
+       ((('con' in lname) and
+         (not lname.startswith('con'))) or
+        ('cyl' in lname) or\
+        ('sph' in lname) or\
+        lname.startswith('t0') or\
+        lname.startswith('t1') or\
+        ('bump' in lname)):
+        
+        setMeshSmooth(bm)
+        
+        # Old method - the loop is probably faster (being written in C), but it
+        # causes a scene update after
+        #bpy.ops.object.shade_smooth()
+    
+    bmesh.ops.remove_doubles(bm, verts=list(bm.verts), dist=0.0001)
+    
     bm.to_mesh(mesh)
     bm.free()
     mesh.update()
@@ -513,7 +534,6 @@ def main(fname, context=None, transform=False):
     global MATERIALS, LDRAWDIR, GAPMAT, SMOOTH, HIRES, USELIGHTS
     #Blender.Window.WaitCursor(1)
     start = time.time()
-    IMPORTDIR = os.path.split(fname)[0]
     MATERIALS = {}
     readFile(os.path.join(LDRAWDIR, "LDConfig.ldr"), BFCContext(), first=False)
     readFile(fname, BFCContext(), first=True, transform=transform)
