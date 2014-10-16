@@ -1,22 +1,23 @@
 bl_info = {
     'name': "Import LDraw model format",
     'author': "Spencer Alves (impiaaa)",
-    'version': (1,0),
+    'version': (1, 0),
     'blender': (2, 70, 0),
     'location': "File > Import > Import LDraw",
     'description': "This script imports LDraw model files.",
-    'warning': "Some parts may be distorted", # used for warning icon and text in addons panel
+    # used for warning icon and text in addons panel
+    'warning': "Some parts may be distorted",
     'category': "Import-Export"}
 
 """\
 This script imports LDraw model files.
 
 From the LDraw website:
-"LDraw(tm) is an open standard for LEGO CAD programs that allow the user to 
-create virtual LEGO models and scenes. You can use it to document models you 
-have physically built, create building instructions just like LEGO, render 3D 
-photo realistic images of your virtual models and even make animations. The 
-possibilities are endless. Unlike real LEGO bricks where you are limited by the 
+"LDraw(tm) is an open standard for LEGO CAD programs that allow the user to
+create virtual LEGO models and scenes. You can use it to document models you
+have physically built, create building instructions just like LEGO, render 3D
+photo realistic images of your virtual models and even make animations. The
+possibilities are endless. Unlike real LEGO bricks where you are limited by the
 number of parts and colors, in LDraw nothing is impossible."
 
 Usage:
@@ -44,7 +45,8 @@ LOWRES = False
 ### UTILITY FUNCTIONS ###
 
 def hex2rgb(hexColor):
-    if hexColor[0] == '#': hexColor = hexColor[1:]
+    if hexColor[0] == '#':
+        hexColor = hexColor[1:]
     return int(hexColor[0:2], 16)/255.0, int(hexColor[2:4], 16)/255.0, int(hexColor[4:6], 16)/255.0
 
 def genDict(ls, keys):
@@ -81,7 +83,8 @@ def matrixEqual(a, b, threshold=THRESHOLD):
         return False
     for i in range(len(a)):
         for j in range(len(a[i])):
-            if a[i][j] - b[i][j] > threshold: return False
+            if a[i][j] - b[i][j] > threshold:
+                return False
     return True
 
 class BFCContext(object):
@@ -98,7 +101,7 @@ class BFCContext(object):
             self.winding = CCW
             self.invertNext = False
             self.certified = None
-            if other != None and other.certified == True:
+            if other is not None and other.certified:
                 self.certified = True
                 self.accumCull = other.accumCull and other.localCull
                 self.accumInvert = other.accumInvert ^ other.invertNext
@@ -119,7 +122,8 @@ def createMaterial(name, line, lineDict):
     else:
         mat = bpy.data.materials.new(name)
     materialId = lineDict['CODE']
-    if materialId.isdigit(): materialId = int(materialId)
+    if materialId.isdigit():
+        materialId = int(materialId)
     MATERIALS[materialId] = mat.name
     mat.game_settings.use_backface_culling = False # BFC not working ATM
     value = hex2rgb(lineDict['VALUE'])
@@ -128,7 +132,7 @@ def createMaterial(name, line, lineDict):
     alpha = int(lineDict.get('ALPHA', 255))
     mat.alpha = alpha/255.0
     mat.emit = int(lineDict.get('LUMINANCE', 0))/127.0
-    
+
     if "CHROME" in line:
         mat.ambient = 0.25
         mat.diffuse_intensity = 0.6
@@ -197,7 +201,7 @@ def createMaterial(name, line, lineDict):
             slot = mat.texture_slots.add()
             slot.texture = tex
             mat.use_textures[0] = True
-            
+
         if alpha < 255:
             mat.raytrace_mirror.use = True
             mat.ambient = 0.3
@@ -208,7 +212,7 @@ def createMaterial(name, line, lineDict):
         else:
             mat.ambient = 0.1
             mat.specular_intensity = 0.2
-            
+
     elif alpha < 255:
         mat.raytrace_mirror.use = True
         mat.ambient = 0.3
@@ -224,7 +228,7 @@ def createMaterial(name, line, lineDict):
     if alpha < 255:
         mat.use_transparency = True
         mat.transparency_method = "RAYTRACE"
-    
+
     return mat
 
 def lineType0(line, bfc, someObj=None):
@@ -249,20 +253,22 @@ def lineType0(line, bfc, someObj=None):
         line = [s.upper() for s in line]
         lineDict = genDict(line, ['CODE', 'VALUE', 'ALPHA', 'LUMINANCE'])
         createMaterial(name, line, lineDict)
-    
+
     elif line[1] == "BFC":
         # http://www.ldraw.org/article/415
         if bfc.certified and "NOCERTIFY" not in line:
             bfc.certified = True
         for option in line[2:]:
             if option == "CERTIFY":
-                assert bfc.certified != False
+                assert bfc.certified
                 bfc.certified = True
             elif option == "NOCERTIFY":
-                assert bfc.certified != True
+                assert not bfc.certified
                 bfc.certified = False
-            elif option == "CLIP": bfc.localCull = True
-            elif option == "NOCLIP": bfc.localCull = False
+            elif option == "CLIP":
+                bfc.localCull = True
+            elif option == "NOCLIP":
+                bfc.localCull = False
             elif option == "CCW":
                 if bfc.accumInvert:
                     bfc.winding = CW
@@ -274,7 +280,7 @@ def lineType0(line, bfc, someObj=None):
                 else:
                     bfc.winding = CW
             elif option == "INVERTNEXT":
-                 bfc.invertNext = True
+                bfc.invertNext = True
 
 def colorReference(s):
     if s.isdigit():
@@ -309,7 +315,8 @@ def lineType1(line, oldObj, oldMaterial, bfc, subfiles={}):
     newMatrix[2][:] = [float(line[11]), float(line[12]), float(line[13]), float(line[4])]
     newMatrix[3][:] = [           0.0,              0.0,             0.0,            1.0]
     materialId, material = colorReference(line[1])
-    if materialId in (16, 24): material = oldMaterial
+    if materialId in (16, 24):
+        material = oldMaterial
     if lname in subfiles:
         newObj = readFile(fname, BFCContext(bfc), subfiles=subfiles, material=material)
     elif lname == 'light.dat' and USELIGHTS:
@@ -340,24 +347,15 @@ def poly(line, bm):
     # helper function for making polygons
     vertices = []
     for i in range(0, len(line), 3):
-        newVert = mathutils.Vector((float(line[i]), float(line[i+1]), float(line[i+2])))
-        #existingVert = None
-        #for v in bm.verts:
-        #    if (abs(v.co[0]-newVert[0]) < THRESHOLD)\
-        #       and (abs(v.co[1]-newVert[1]) < THRESHOLD)\
-        #       and (abs(v.co[2]-newVert[2]) < THRESHOLD):
-        #        existingVert = v
-        #        break
-        #if existingVert == None:
-        existingVert = bm.verts.new(newVert)
-        vertices.append(existingVert)
+        vertices.append(bm.verts.new(mathutils.Vector((float(line[i]), float(line[i+1]), float(line[i+2])))))
     return bm.faces.new(vertices)
 
 def readLine(line, o, material, bfc, bm, subfiles={}, readLater=None):
     # Returns True if the file references any files or contains any polys;
     # otherwise, it is likely a header file and can be ignored.
     line = line.strip()
-    if len(line) == 0: return False
+    if len(line) == 0:
+        return False
     command = line[:max(line.find(' '), 1)]
     if command == '0':
         # Comment or meta-command
@@ -374,7 +372,8 @@ def readLine(line, o, material, bfc, bm, subfiles={}, readLater=None):
     elif command in ('3', '4'):
         # Tri or quad (poly)
         line = line.split()
-        try: newFace = poly(line[2:], bm)
+        try:
+            newFace = poly(line[2:], bm)
         except ValueError as e:
             warnings.warn(e)
             return True # for debugging, maybe?
@@ -409,7 +408,7 @@ def readFile(fname, bfc, first=False, smooth=False, material=None, transform=Fal
     else:
         fname = fname.replace('\\', os.path.sep)
         f = None
-    
+
         paths = [fname,
                  os.path.join(LDRAWDIR, "PARTS", fname),
                  os.path.join(LDRAWDIR, "P", fname),
@@ -418,7 +417,7 @@ def readFile(fname, bfc, first=False, smooth=False, material=None, transform=Fal
             paths.insert(2, os.path.join(LDRAWDIR, "P", "48", fname))
         if LOWRES:
             paths.insert(2, os.path.join(LDRAWDIR, "P", "8", fname))
-        
+
         for path in paths:
             if os.path.exists(path):
                 f = open(path)
@@ -427,11 +426,11 @@ def readFile(fname, bfc, first=False, smooth=False, material=None, transform=Fal
             if os.path.exists(lpath):
                 f = open(lpath)
                 break
-        
+
         if f is None:
             warnings.warn("Could not find file %s" % fname)
             return
-    
+
         if os.path.splitext(fname)[1].lower() in ('.mpd', '.ldr'):
             # multi-part!
             subfiles = {}
@@ -440,28 +439,29 @@ def readFile(fname, bfc, first=False, smooth=False, material=None, transform=Fal
             for line in f:
                 if line[0] == '0':
                     sline = line.split()
-                    if len(sline) < 2: continue
+                    if len(sline) < 2:
+                        continue
                     if sline[1].lower() == 'file':
                         i = line.lower().find('file')
                         i += 4
                         name = line[i:].strip().lower()
                         subfiles[name] = ''
-                        if firstName == None:
+                        if firstName is None:
                             firstName = name
                     elif sline[1].lower() == 'nofile':
                         name = None
-                    elif name != None:
+                    elif name is not None:
                         subfiles[name] += line
-                elif name != None:
+                elif name is not None:
                     subfiles[name] += line
-            if firstName == None:
+            if firstName is None:
                 # This is if it wasn't actually multi-part (as is the case with most LDRs)
                 firstName = fname.lower()
                 f.seek(0)
                 subfiles[firstName] = f.read()
             f.close()
             return readFile(firstName, bfc, first=first, smooth=smooth, material=material, transform=transform, subfiles=subfiles)
-        
+
     mname = os.path.split(fname)[1]
     if mname in bpy.data.objects:
         # We don't need to re-import a part if it's already in the file
@@ -477,7 +477,7 @@ def readFile(fname, bfc, first=False, smooth=False, material=None, transform=Fal
     bm = bmesh.new()
     obj = bpy.data.objects.new(mname, mesh)
     bpy.context.scene.objects.link(obj)
-    
+
     obj.active_material_index = 0
     obj.active_material = material
     obj.material_slots[0].link = 'OBJECT'
@@ -499,25 +499,25 @@ def readFile(fname, bfc, first=False, smooth=False, material=None, transform=Fal
         for line in f:
             containsData = readLine(line, obj, material, bfc, bm, subfiles=subfiles, readLater=readLater) or containsData
         f.close()
-    
+
     lname = fname.lower()
     if SMOOTH and\
        ((('con' in lname) and
          (not lname.startswith('con'))) or
-        ('cyl' in lname) or\
-        ('sph' in lname) or\
-        lname.startswith('t0') or\
-        lname.startswith('t1') or\
+        ('cyl' in lname) or
+        ('sph' in lname) or
+        lname.startswith('t0') or
+        lname.startswith('t1') or
         ('bump' in lname)):
-        
+
         setMeshSmooth(bm)
-        
+
         # Old method - the loop is probably faster (being written in C), but it
         # causes a scene update after
         #bpy.ops.object.shade_smooth()
-    
+
     bmesh.ops.remove_doubles(bm, verts=list(bm.verts), dist=0.0001)
-    
+
     bm.to_mesh(mesh)
     bm.free()
     mesh.update()
@@ -542,12 +542,12 @@ def main(fname, context=None, transform=False):
 
 class IMPORT_OT_ldraw(bpy.types.Operator):
     '''Import LDraw model Operator.'''
-    bl_idname= "import_scene.ldraw_dat"
-    bl_label= "Import LDR/DAT/MPD"
-    bl_description= "Import an LDraw model file (.dat, .ldr, .mpd)"
-    bl_options= {'REGISTER', 'UNDO'}
+    bl_idname = "import_scene.ldraw_dat"
+    bl_label = "Import LDR/DAT/MPD"
+    bl_description = "Import an LDraw model file (.dat, .ldr, .mpd)"
+    bl_options = {'REGISTER', 'UNDO'}
 
-    filepath= bpy.props.StringProperty(name="File Path", description="Filepath used for importing the LDR/DAT/MPD file", maxlen=MAXPATH, default="")
+    filepath = bpy.props.StringProperty(name="File Path", description="Filepath used for importing the LDR/DAT/MPD file", maxlen=MAXPATH, default="")
 
     ldrawPathProp = bpy.props.StringProperty(name="LDraw directory", description="The directory in which the P and PARTS directories reside", maxlen=MAXPATH, default={"win32": "C:\\Program Files\\LDraw", "darwin": "/Library/LDraw"}.get(sys.platform, "/usr/share/ldraw"))
     transformProp = bpy.props.BoolProperty(name="Transform", description="Transform objects to match Blender's coordinate system", default=True)
@@ -576,16 +576,16 @@ class IMPORT_OT_ldraw(bpy.types.Operator):
 def menu_import(self, context):
     self.layout.operator(IMPORT_OT_ldraw.bl_idname, text="LDraw Model (.dat, .mpd, .ldr)")
 
-def register(): 
-    bpy.utils.register_module(__name__) 
+def register():
+    bpy.utils.register_module(__name__)
     bpy.types.INFO_MT_file_import.append(menu_import)
     bpy.types.Object.ldrawInheritsColor = bpy.props.BoolProperty()
-     
+
 def unregister():
-    bpy.utils.unregister_module(__name__) 
+    bpy.utils.unregister_module(__name__)
     bpy.types.INFO_MT_file_import.remove(menu_import)
     del bpy.types.Object.ldrawInheritsColor
-     
+
 if __name__ == "__main__":
     register()
     #import cProfile
