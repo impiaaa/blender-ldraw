@@ -113,6 +113,17 @@ def setMeshSmooth(me):
     for mp in me.faces:
         mp.smooth = True
 
+partsCache = set()
+def isAPart(name):
+    global partsCache
+    if name in partsCache:
+        return True
+    elif os.path.exists(os.path.join(LDRAWDIR, "parts", name)):
+        partsCache.add(name)
+        return True
+    else:
+        return False
+
 ### IMPORTER ###
 
 def createMaterial(name, line, lineDict):
@@ -260,7 +271,7 @@ def lineType0(line, bfc, someObj=None):
             bfc.certified = True
         for option in line[2:]:
             if option == "CERTIFY":
-                assert bfc.certified
+                assert bfc.certified is None or bfc.certified
                 bfc.certified = True
             elif option == "NOCERTIFY":
                 assert not bfc.certified
@@ -301,13 +312,17 @@ def colorReference(s):
         warnings.warn("Malformed color reference: {0}".format(s))
     return None, None
 
-def lineType1(line, oldObj, oldMaterial, bfc, subfiles={}):
+def findMaterialIndex(listOfSlots, material):
+    for idx, slot in enumerate(listOfSlots):
+        if slot.link == "DATA" and slot.material == material:
+            return idx
+
+def lineType1(line, oldObj, oldMaterial, bfc, subfiles={}, merge=False):
     # File reference
     idx = 0
     for i in range(14):
         idx = line.find(' ', idx)+1
-    fname = line[idx:]
-    lname = fname.lower()
+    fname = line[idx:].lower()
     line = line.split()
     newMatrix = mathutils.Matrix()
     newMatrix[0][:] = [float(line[ 5]), float(line[ 6]), float(line[ 7]), float(line[2])]
@@ -317,9 +332,9 @@ def lineType1(line, oldObj, oldMaterial, bfc, subfiles={}):
     materialId, material = colorReference(line[1])
     if materialId in (16, 24):
         material = oldMaterial
-    if lname in subfiles:
-        newObj = readFile(fname, BFCContext(bfc), subfiles=subfiles, material=material)
-    elif lname == 'light.dat' and USELIGHTS:
+    if fname in subfiles:
+        newObj = readFile(fname, BFCContext(bfc), subfiles=subfiles, material=material, merge=merge)
+    elif fname == 'light.dat' and USELIGHTS:
         l = bpy.data.lamps.new(fname)
         newObj = bpy.data.objects.new(fname, l)
 
@@ -327,21 +342,43 @@ def lineType1(line, oldObj, oldMaterial, bfc, subfiles={}):
         l.energy = material.alpha
         l.shadow_method = "RAY_SHADOW"
     else:
-        newObj = readFile(fname, BFCContext(bfc), material=material)
+        newObj = readFile(fname, BFCContext(bfc), material=material, merge=merge or (MERGEPARTS and isAPart(fname)))
     if newObj:
+        if isAPart(fname):
+            if not ((fname[0] == 's') and (fname[1] in ('/', '\\'))):
+                newMatrix *= GAPMAT
+        if bfc.invertNext:
+            #newMatrix = -1*newMatrix
+            pass
         if materialId in (16, 24):
             newObj.ldrawInheritsColor = True
-        newObj.parent = oldObj
-        if os.path.exists(os.path.join(LDRAWDIR, "PARTS", fname)) or\
-           os.path.exists(os.path.join(LDRAWDIR, "parts", fname)):
-            if not ((fname[0] in ('s', 'S')) and (fname[1] in ('/', '\\'))):
-                newMatrix *= GAPMAT
-        newObj.matrix_local = newMatrix
-        if bfc.invertNext:
-            #newObj.matrix_local = -1*newObj.matrix_local
-            pass
-        if not matrixEqual(newMatrix, newObj.matrix_local):
-            warnings.warn("Object matrix has changed, model may have errors!")
+        if merge:
+            oldToNewMatMap = {0: 0}
+            for subMatIdx, subMaterialSlot in enumerate(newObj.material_slots):
+                if newObj.ldrawInheritsColor and subMaterialSlot.link == "OBJECT": continue
+                matIdx = findMaterialIndex(oldObj.material_slots, subMaterialSlot.material)
+                if matIdx is None:
+                    oldObj.data.materials.append(subMaterialSlot.material)
+                    oldToNewMatMap[subMatIdx] = len(oldObj.material_slots)-1
+                else:
+                    oldToNewMatMap[subMatIdx] = matIdx
+            bm = bmesh.new()
+            bm.from_mesh(newObj.data, face_normals=False)
+            for face in bm.faces:
+                face.material_index = oldToNewMatMap[face.material_index]
+            bm.transform(newMatrix)
+            bm.from_mesh(oldObj.data, face_normals=False)
+            bm.to_mesh(oldObj.data)
+            bm.free()
+            childData = newObj.data
+            #bpy.data.objects.remove(newObj)
+            #bpy.data.meshes.remove(childData)
+        else:
+            bpy.context.scene.objects.link(newObj)
+            newObj.parent = oldObj
+            newObj.matrix_local = newMatrix
+            if not matrixEqual(newMatrix, newObj.matrix_local):
+                warnings.warn("Object matrix has changed, model may have errors!")
 
 def poly(line, bm):
     # helper function for making polygons
@@ -350,7 +387,7 @@ def poly(line, bm):
         vertices.append(bm.verts.new(mathutils.Vector((float(line[i]), float(line[i+1]), float(line[i+2])))))
     return bm.faces.new(vertices)
 
-def readLine(line, o, material, bfc, bm, subfiles={}, readLater=None):
+def readLine(line, o, material, bfc, bm, subfiles={}, readLater=None, merge=False):
     # Returns True if the file references any files or contains any polys;
     # otherwise, it is likely a header file and can be ignored.
     line = line.strip()
@@ -364,9 +401,9 @@ def readLine(line, o, material, bfc, bm, subfiles={}, readLater=None):
     elif command == '1':
         # File reference
         if readLater is None:
-            lineType1(line, o, material, bfc, subfiles=subfiles)
+            lineType1(line, o, material, bfc, subfiles=subfiles, merge=merge)
         else:
-            readLater.append((line, o, material, BFCContext(bfc, True), subfiles))
+            readLater.append((line, o, material, BFCContext(bfc, True), subfiles, merge))
         bfc.invertNext = False
         return True
     elif command in ('3', '4'):
@@ -400,38 +437,35 @@ def readLine(line, o, material, bfc, bm, subfiles={}, readLater=None):
         warnings.warn("Unknown linetype %s\n" % command)
         return False
 
-def readFile(fname, bfc, first=False, smooth=False, material=None, transform=False, subfiles={}):
-    if fname.lower() in subfiles:
+def readFile(fname, bfc, first=False, smooth=False, material=None, transform=False, subfiles={}, merge=False):
+    global IGNOREOBJECTS
+    if fname in subfiles:
         # part of a multi-part
         import io
-        f = io.StringIO(subfiles[fname.lower()])
+        f = io.StringIO(subfiles[fname])
     else:
         fname = fname.replace('\\', os.path.sep)
         f = None
 
         paths = [fname,
-                 os.path.join(LDRAWDIR, "PARTS", fname),
-                 os.path.join(LDRAWDIR, "P", fname),
-                 os.path.join(LDRAWDIR, "MODELS", fname)]
+                 os.path.join(LDRAWDIR, "parts", fname),
+                 os.path.join(LDRAWDIR, "p", fname),
+                 os.path.join(LDRAWDIR, "models", fname)]
         if HIRES:
-            paths.insert(2, os.path.join(LDRAWDIR, "P", "48", fname))
+            paths.insert(2, os.path.join(LDRAWDIR, "p", "48", fname))
         if LOWRES:
-            paths.insert(2, os.path.join(LDRAWDIR, "P", "8", fname))
+            paths.insert(2, os.path.join(LDRAWDIR, "p", "8", fname))
 
         for path in paths:
             if os.path.exists(path):
                 f = open(path)
-                break
-            lpath = path.lower()
-            if os.path.exists(lpath):
-                f = open(lpath)
                 break
 
         if f is None:
             warnings.warn("Could not find file %s" % fname)
             return
 
-        if os.path.splitext(fname)[1].lower() in ('.mpd', '.ldr'):
+        if os.path.splitext(fname)[1] in ('.mpd', '.ldr'):
             # multi-part!
             subfiles = {}
             name = None
@@ -441,14 +475,14 @@ def readFile(fname, bfc, first=False, smooth=False, material=None, transform=Fal
                     sline = line.split()
                     if len(sline) < 2:
                         continue
-                    if sline[1].lower() == 'file':
-                        i = line.lower().find('file')
+                    if sline[1] == 'FILE':
+                        i = line.find('FILE')
                         i += 4
                         name = line[i:].strip().lower()
                         subfiles[name] = ''
                         if firstName is None:
                             firstName = name
-                    elif sline[1].lower() == 'nofile':
+                    elif sline[1] == 'NOFILE':
                         name = None
                     elif name is not None:
                         subfiles[name] += line
@@ -460,9 +494,11 @@ def readFile(fname, bfc, first=False, smooth=False, material=None, transform=Fal
                 f.seek(0)
                 subfiles[firstName] = f.read()
             f.close()
-            return readFile(firstName, bfc, first=first, smooth=smooth, material=material, transform=transform, subfiles=subfiles)
+            return readFile(firstName, bfc, first=first, smooth=smooth, material=material, transform=transform, subfiles=subfiles, merge=merge)
 
     mname = os.path.split(fname)[1]
+    if mname in IGNOREOBJECTS:
+        return None
     if mname in bpy.data.objects:
         # We don't need to re-import a part if it's already in the file
         obj = copyAndApplyMaterial(bpy.data.objects[mname], material)
@@ -470,13 +506,11 @@ def readFile(fname, bfc, first=False, smooth=False, material=None, transform=Fal
         obj.active_material = material
         obj.material_slots[0].link = 'OBJECT'
         obj.active_material = material
-        bpy.context.scene.objects.link(obj)
         return obj
 
     mesh = bpy.data.meshes.new(mname)
     bm = bmesh.new()
     obj = bpy.data.objects.new(mname, mesh)
-    bpy.context.scene.objects.link(obj)
 
     obj.active_material_index = 0
     obj.active_material = material
@@ -491,24 +525,23 @@ def readFile(fname, bfc, first=False, smooth=False, material=None, transform=Fal
         total = len(lines)
         for idx, line in enumerate(lines):
             print("Processing line {0}/{1}".format(idx, total))
-            containsData = readLine(line, obj, material, bfc, bm, subfiles=subfiles, readLater=readLater) or containsData
+            containsData = readLine(line, obj, material, bfc, bm, subfiles=subfiles, readLater=readLater, merge=merge) or containsData
         if transform:
             obj.matrix_local = DEFAULTMAT
         del lines
     else:
         for line in f:
-            containsData = readLine(line, obj, material, bfc, bm, subfiles=subfiles, readLater=readLater) or containsData
+            containsData = readLine(line, obj, material, bfc, bm, subfiles=subfiles, readLater=readLater, merge=merge) or containsData
         f.close()
 
-    lname = fname.lower()
     if SMOOTH and\
-       ((('con' in lname) and
-         (not lname.startswith('con'))) or
-        ('cyl' in lname) or
-        ('sph' in lname) or
-        lname.startswith('t0') or
-        lname.startswith('t1') or
-        ('bump' in lname)):
+       ((('con' in fname) and
+         (not fname.startswith('con'))) or
+        ('cyl' in fname) or
+        ('sph' in fname) or
+        fname.startswith('t0') or
+        fname.startswith('t1') or
+        ('bump' in fname)):
 
         setMeshSmooth(bm)
 
@@ -516,27 +549,35 @@ def readFile(fname, bfc, first=False, smooth=False, material=None, transform=Fal
         # causes a scene update after
         #bpy.ops.object.shade_smooth()
 
+    bm.to_mesh(mesh)
+    bm.free()
+    for args in readLater:
+        lineType1(*args)
+    
+    bm = bmesh.new()
+    bm.from_mesh(mesh)
     bmesh.ops.remove_doubles(bm, verts=list(bm.verts), dist=0.0001)
-
     bm.to_mesh(mesh)
     bm.free()
     mesh.update()
-    for args in readLater:
-        lineType1(*args)
+    
     if not containsData:
-        # This is to check for header files (like ldconfig.ldr)
-        bpy.context.scene.objects.unlink(obj)
+        # This is to check for header files (like ldconfig.ldr) and
+        # other blank files (like 4-4edge.dat)
+        IGNOREOBJECTS.add(mname)
         bpy.data.objects.remove(obj)
         return None
     return obj
 
 def main(fname, context=None, transform=False):
-    global MATERIALS, LDRAWDIR, GAPMAT, SMOOTH, HIRES, USELIGHTS
+    global MATERIALS, IGNOREOBJECTS
     #Blender.Window.WaitCursor(1)
     start = time.time()
     MATERIALS = {}
+    IGNOREOBJECTS = set()
     readFile(os.path.join(LDRAWDIR, "LDConfig.ldr"), BFCContext(), first=False)
-    readFile(fname, BFCContext(), first=True, transform=transform)
+    obj = readFile(fname, BFCContext(), first=True, transform=transform)
+    bpy.context.scene.objects.link(obj)
     context.scene.update()
     print('LDraw "{0}" imported in {1:.4} seconds.'.format(fname, time.time()-start))
 
@@ -555,9 +596,10 @@ class IMPORT_OT_ldraw(bpy.types.Operator):
     hiResProp = bpy.props.BoolProperty(name="Hi-Res prims", description="Force use of high-resolution primitives, if possible", default=False)
     lightProp = bpy.props.BoolProperty(name="Lights from model", description="Create lamps in place of light.dat references", default=True)
     scaleProp = bpy.props.FloatProperty(name="Seam width", description="The amout of space in-between individual parts", default=0.001, min=0.0, max=1.0, precision=3)
+    mergePartsProp = bpy.props.BoolProperty(name="Merge parts", description="Automatically combine sub-parts into single objects", default=True)
 
     def execute(self, context):
-        global LDRAWDIR, SMOOTH, HIRES, USELIGHTS, GAPMAT
+        global LDRAWDIR, SMOOTH, HIRES, USELIGHTS, GAPMAT, MERGEPARTS
         LDRAWDIR = str(self.ldrawPathProp)
         transform = bool(self.transformProp)
         SMOOTH = bool(self.smoothProp)
@@ -565,6 +607,7 @@ class IMPORT_OT_ldraw(bpy.types.Operator):
         USELIGHTS = bool(self.lightProp)
         gap = float(self.scaleProp)
         GAPMAT = mathutils.Matrix.Scale(1.0-gap, 4)
+        MERGEPARTS = bool(self.mergePartsProp)
         main(self.filepath, context, transform)
         return {'FINISHED'}
 
