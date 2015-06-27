@@ -61,8 +61,7 @@ def copyAndApplyMaterial(o, mat):
     # scene, but not the parent.
     # Also recursively set mat to the 0 material slot.
     p = o.copy()
-    if o.ldrawInheritsColor:
-        p.ldrawInheritsColor = True
+    if mat is not None:
         if len(p.material_slots) > 0:
             p.material_slots[0].material = mat
         else:
@@ -73,7 +72,12 @@ def copyAndApplyMaterial(o, mat):
     # This loop is REALLY SLOW for large scenes, since .children iterates through
     # every object in the scene
     for c in o.children:
-        d = copyAndApplyMaterial(c, mat)
+        if c.ldrawInheritsColor:
+            d = copyAndApplyMaterial(c, mat)
+            d.ldrawInheritsColor = True
+        else:
+            d = copyAndApplyMaterial(c, None)
+            d.ldrawInheritsColor = False
         bpy.context.scene.objects.link(d)
         d.parent = p
     return p
@@ -350,8 +354,7 @@ def lineType1(line, oldObj, oldMaterial, bfc, subfiles={}, merge=False):
         if bfc.invertNext:
             #newMatrix = -1*newMatrix
             pass
-        if materialId in (16, 24):
-            newObj.ldrawInheritsColor = True
+        newObj.ldrawInheritsColor =  materialId in (16, 24)
         if merge:
             oldToNewMatMap = {0: 0}
             for subMatIdx, subMaterialSlot in enumerate(newObj.material_slots):
