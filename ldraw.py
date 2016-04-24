@@ -132,16 +132,23 @@ def isAPart(name):
 
 def createMaterial(name, line, lineDict):
     global MATERIALS
+    
+    value = hex2rgb(lineDict['VALUE'])
+    
+    materialId = lineDict['CODE']
+    if materialId.isdigit():
+        materialId = int(materialId)
+        #if materialId == 24:
+        #    bpy.context.user_preferences.themes[0].view_3d.wire = value
+        if materialId in (16, 24):
+            return None # Not allowed to use these colors directly
+    
     if name in bpy.data.materials:
         mat = bpy.data.materials[name]
     else:
         mat = bpy.data.materials.new(name)
-    materialId = lineDict['CODE']
-    if materialId.isdigit():
-        materialId = int(materialId)
     MATERIALS[materialId] = mat.name
-    mat.game_settings.use_backface_culling = False # BFC not working ATM
-    value = hex2rgb(lineDict['VALUE'])
+    
     mat.diffuse_color = value
     # We can ignore the edge color value
     alpha = int(lineDict.get('ALPHA', 255))
@@ -248,7 +255,6 @@ def createMaterial(name, line, lineDict):
 
 def lineType0(line, bfc, someObj=None):
     # Comment or meta-command
-    line = line.split()
     if len(line) < 2:
         return
     if line[1] in ('WRITE', 'PRINT'):
@@ -285,15 +291,14 @@ def lineType0(line, bfc, someObj=None):
             elif option == "NOCLIP":
                 bfc.localCull = False
             elif option == "CCW":
-                if bfc.accumInvert:
-                    bfc.winding = CW
-                else:
-                    bfc.winding = CCW
+                # According to the spec, winding should alternate depending on
+                # accumInvert. However, for an importer, since accumInvert
+                # depends on the files above in the hierarchy, we should only
+                # use locally-specified winding, then invert when collapsing
+                # the mesh
+                bfc.winding = CCW
             elif option == "CW":
-                if bfc.accumInvert:
-                    bfc.winding = CCW
-                else:
-                    bfc.winding = CW
+                bfc.winding = CW
             elif option == "INVERTNEXT":
                 bfc.invertNext = True
 
@@ -323,16 +328,26 @@ def findMaterialIndex(listOfSlots, material):
 
 def lineType1(line, oldObj, oldMaterial, bfc, subfiles={}, merge=False):
     # File reference
-    idx = 0
+    idx = -1
     for i in range(14):
-        idx = line.find(' ', idx)+1
-    fname = line[idx:].lower()
+        while True:
+            nextSpace = line.find(' ', idx+1)
+            if nextSpace == -1: return
+            if nextSpace > idx+1:
+                idx = nextSpace
+                break
+            idx = nextSpace
+    fname = line[idx+1:].lower()
     line = line.split()
     newMatrix = mathutils.Matrix()
     newMatrix[0][:] = [float(line[ 5]), float(line[ 6]), float(line[ 7]), float(line[2])]
     newMatrix[1][:] = [float(line[ 8]), float(line[ 9]), float(line[10]), float(line[3])]
     newMatrix[2][:] = [float(line[11]), float(line[12]), float(line[13]), float(line[4])]
     newMatrix[3][:] = [           0.0,              0.0,             0.0,            1.0]
+    
+    if newMatrix.determinant() < 0:
+        bfc.invertNext = not bfc.invertNext
+    
     materialId, material = colorReference(line[1])
     if materialId in (16, 24):
         material = oldMaterial
@@ -351,10 +366,7 @@ def lineType1(line, oldObj, oldMaterial, bfc, subfiles={}, merge=False):
         if isAPart(fname):
             if not ((fname[0] == 's') and (fname[1] in ('/', '\\'))):
                 newMatrix *= GAPMAT
-        if bfc.invertNext:
-            #newMatrix = -1*newMatrix
-            pass
-        newObj.ldrawInheritsColor =  materialId in (16, 24)
+        newObj.ldrawInheritsColor = materialId in (16, 24)
         if merge:
             oldToNewMatMap = {0: 0}
             for subMatIdx, subMaterialSlot in enumerate(newObj.material_slots):
@@ -367,6 +379,12 @@ def lineType1(line, oldObj, oldMaterial, bfc, subfiles={}, merge=False):
                     oldToNewMatMap[subMatIdx] = matIdx
             bm = bmesh.new()
             bm.from_mesh(newObj.data, face_normals=False)
+            
+            # Only use invertNext (not accumInvert), since reversals will be
+            # accumulated when collapsing/merging
+            if bfc.invertNext:
+                bmesh.ops.reverse_faces(bm, faces=bm.faces, flip_multires=False)
+            
             for face in bm.faces:
                 face.material_index = oldToNewMatMap[face.material_index]
             bm.transform(newMatrix)
@@ -383,11 +401,13 @@ def lineType1(line, oldObj, oldMaterial, bfc, subfiles={}, merge=False):
             if not matrixEqual(newMatrix, newObj.matrix_local):
                 warnings.warn("Object matrix has changed, model may have errors!")
 
-def poly(line, bm):
+def poly(line, bm, bfc):
     # helper function for making polygons
     vertices = []
     for i in range(0, len(line), 3):
         vertices.append(bm.verts.new(mathutils.Vector((float(line[i]), float(line[i+1]), float(line[i+2])))))
+    if bfc.winding == CW:
+        vertices.reverse()
     return bm.faces.new(vertices)
 
 def readLine(line, o, material, bfc, bm, subfiles={}, readLater=None, merge=False):
@@ -399,23 +419,28 @@ def readLine(line, o, material, bfc, bm, subfiles={}, readLater=None, merge=Fals
     command = line[:max(line.find(' '), 1)]
     if command == '0':
         # Comment or meta-command
-        lineType0(line, bfc)
+        sline = line.split()
+        lineType0(sline, bfc)
+        if len(sline) < 2 or sline[1] != "BFC":
+            bfc.invertNext = False
         return False
     elif command == '1':
         # File reference
         if readLater is None:
-            lineType1(line, o, material, bfc, subfiles=subfiles, merge=merge)
+            lineType1(line, o, material, BFCContext(bfc, True), subfiles=subfiles, merge=merge)
         else:
-            readLater.append((line, o, material, BFCContext(bfc, True), subfiles, merge))
+            newbfc = BFCContext(bfc, True)
+            readLater.append((line, o, material, newbfc, subfiles, merge))
         bfc.invertNext = False
         return True
     elif command in ('3', '4'):
         # Tri or quad (poly)
         line = line.split()
         try:
-            newFace = poly(line[2:], bm)
+            newFace = poly(line[2:], bm, bfc)
         except ValueError as e:
             warnings.warn(e)
+            bfc.invertNext = False
             return True # for debugging, maybe?
         color, faceMat = colorReference(line[1])
         if color not in (16, 24):
@@ -431,10 +456,12 @@ def readLine(line, o, material, bfc, bm, subfiles={}, readLater=None, merge=Fals
                 newFace.material_index = slotIdx
         else:
             newFace.material_index = 0
+        bfc.invertNext = False
         return True
     elif command in ('2', '5'):
         # Line and conditional line
         # Not supported
+        bfc.invertNext = False
         return False
     else:
         warnings.warn("Unknown linetype %s\n" % command)
@@ -497,6 +524,8 @@ def readFile(fname, bfc, first=False, smooth=False, material=None, transform=Fal
                 f.seek(0)
                 subfiles[firstName] = f.read()
             f.close()
+            # "When an MPD file is used to store a multi-file model, the first
+            # file in the MPD is treated as the 'main model'"
             return readFile(firstName, bfc, first=first, smooth=smooth, material=material, transform=transform, subfiles=subfiles, merge=merge)
 
     mname = os.path.split(fname)[1]
@@ -521,24 +550,26 @@ def readFile(fname, bfc, first=False, smooth=False, material=None, transform=Fal
     obj.active_material = material
 
     containsData = False
-    readLater = []
     if first:
         lines = f.readlines()
         f.close()
         total = len(lines)
+        readLaterLines = [None]*total
         for idx, line in enumerate(lines):
-            print("Processing line {0}/{1}".format(idx, total))
+            readLater = []
             containsData = readLine(line, obj, material, bfc, bm, subfiles=subfiles, readLater=readLater, merge=merge) or containsData
+            readLaterLines[idx] = readLater
         if transform:
             obj.matrix_local = DEFAULTMAT
         del lines
     else:
+        readLater = []
         for line in f:
             containsData = readLine(line, obj, material, bfc, bm, subfiles=subfiles, readLater=readLater, merge=merge) or containsData
         f.close()
 
-    if SMOOTH and\
-       ((('con' in fname) and
+    if SMOOTH and (
+        (('con' in fname) and
          (not fname.startswith('con'))) or
         ('cyl' in fname) or
         ('sph' in fname) or
@@ -552,16 +583,26 @@ def readFile(fname, bfc, first=False, smooth=False, material=None, transform=Fal
         # causes a scene update after
         #bpy.ops.object.shade_smooth()
 
-    bm.to_mesh(mesh)
-    bm.free()
-    for args in readLater:
-        lineType1(*args)
-    
-    bm = bmesh.new()
-    bm.from_mesh(mesh)
     bmesh.ops.remove_doubles(bm, verts=list(bm.verts), dist=0.0001)
     bm.to_mesh(mesh)
     bm.free()
+    if first:
+        bpy.context.window_manager.progress_begin(0, total)
+        for idx, readLater in enumerate(readLaterLines):
+            for args in readLater:
+                print("Processing line {0}/{1}".format(idx+1, total))
+                lineType1(*args)
+                bpy.context.window_manager.progress_update(idx+1)
+        bpy.context.window_manager.progress_end()
+    else:
+        for args in readLater:
+            lineType1(*args)
+    
+    #bm = bmesh.new()
+    #bm.from_mesh(mesh)
+    #bmesh.ops.remove_doubles(bm, verts=list(bm.verts), dist=0.0001)
+    #bm.to_mesh(mesh)
+    #bm.free()
     mesh.update()
     
     if not containsData:
