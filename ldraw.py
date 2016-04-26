@@ -130,8 +130,11 @@ def isAPart(name):
 
 ### IMPORTER ###
 
-def createMaterial(name, line, lineDict):
+def createMaterial(name, line, extraAttribs={}):
     global MATERIALS
+    
+    lineDict = genDict(line, ['CODE', 'VALUE', 'ALPHA', 'LUMINANCE', 'EDGE'])
+    lineDict.update(extraAttribs)
     
     value = hex2rgb(lineDict['VALUE'])
     
@@ -140,6 +143,7 @@ def createMaterial(name, line, lineDict):
         materialId = int(materialId)
         #if materialId == 24:
         #    bpy.context.user_preferences.themes[0].view_3d.wire = value
+        #    bpy.data.linestyes[0].color = value
         if materialId in (16, 24):
             return None # Not allowed to use these colors directly
     
@@ -154,6 +158,23 @@ def createMaterial(name, line, lineDict):
     alpha = int(lineDict.get('ALPHA', 255))
     mat.alpha = alpha/255.0
     mat.emit = int(lineDict.get('LUMINANCE', 0))/127.0
+    
+    if hasattr(mat, 'line_color') and 'EDGE' in lineDict:
+        # If Freestyle is enabled, set the line color as the LDraw edge color
+        edge = lineDict['EDGE']
+        if edge[0] == '#':
+            mat.line_color = hex2rgb(edge)+(255,)
+        elif edge.isdigit():
+            # References another color
+            edge = int(edge)
+            if edge in MATERIALS:
+                mat.line_color = bpy.data.materials[MATERIALS[edge]].diffuse_color
+            else:
+                # TODO: The color may not have been defined yet, so we should
+                # postpone edge color lookups until the end
+                warnings.warn("Undefined color {0}".format(edge))
+        else:
+            warnings.warn("Malformed edge color reference: {0}".format(edge))
 
     if "CHROME" in line:
         mat.ambient = 0.25
@@ -272,8 +293,7 @@ def lineType0(line, bfc, someObj=None):
     elif line[1] == '!COLOUR':
         name = line[2].strip()
         line = [s.upper() for s in line]
-        lineDict = genDict(line, ['CODE', 'VALUE', 'ALPHA', 'LUMINANCE'])
-        createMaterial(name, line, lineDict)
+        createMaterial(name, line)
 
     elif line[1] == "BFC":
         # http://www.ldraw.org/article/415
