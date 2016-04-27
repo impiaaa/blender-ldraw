@@ -49,12 +49,15 @@ def hex2rgb(hexColor):
         hexColor = hexColor[1:]
     return int(hexColor[0:2], 16)/255.0, int(hexColor[2:4], 16)/255.0, int(hexColor[4:6], 16)/255.0
 
-def genDict(ls, keys):
+def parseColorLine(ls, keys, flags=set()):
     d = {}
+    s = set()
     for idx, val in enumerate(ls):
-        if val in keys:
+        if val in keys and idx+1 < len(ls):
             d[val] = ls[idx+1]
-    return d
+        elif val in flags:
+            s.add(val)
+    return d, s
 
 def copyAndApplyMaterial(o, mat):
     # Copies and object AND all of its children. Links children to the current
@@ -133,16 +136,30 @@ def isAPart(name):
 def createMaterial(name, line, extraAttribs={}):
     global MATERIALS
     
-    lineDict = genDict(line, ['CODE', 'VALUE', 'ALPHA', 'LUMINANCE', 'EDGE'])
-    lineDict.update(extraAttribs)
+    if 'MATERIAL' in line:
+        matIndex = line.index("MATERIAL")
+        materialName = line[matIndex+1]
+        # "MATERIAL should be the last tag in the !COLOUR statement"
+        materialLine = line[matIndex+2:]
+        line = line[:matIndex]
+        materialAttribs, materialFlags = parseColorLine(materialLine,
+            set(['VALUE', 'ALPHA', 'LUMINANCE', 'FRACTION', 'VFRACTION', 'SIZE', 'MINSIZE', 'MAXSIZE']))
+    else:
+        materialName = None
+
+    attribs, flags = parseColorLine(line,
+        set(['CODE', 'VALUE', 'EDGE', 'ALPHA', 'LUMINANCE']),
+        set(['CHROME', 'PEARLESCENT', 'RUBBER', 'MATTE_METALLIC', 'METAL']))
+    attribs.update(extraAttribs)
     
-    value = hex2rgb(lineDict['VALUE'])
+    del line
     
-    materialId = lineDict['CODE']
+    value = hex2rgb(attribs['VALUE'])
+    
+    materialId = attribs['CODE']
     if materialId.isdigit():
         materialId = int(materialId)
         #if materialId == 24:
-        #    bpy.context.user_preferences.themes[0].view_3d.wire = value
         #    bpy.data.linestyes[0].color = value
         if materialId in (16, 24):
             return None # Not allowed to use these colors directly
@@ -155,13 +172,13 @@ def createMaterial(name, line, extraAttribs={}):
     
     mat.diffuse_color = value
     # We can ignore the edge color value
-    alpha = int(lineDict.get('ALPHA', 255))
+    alpha = int(attribs.get('ALPHA', 255))
     mat.alpha = alpha/255.0
-    mat.emit = int(lineDict.get('LUMINANCE', 0))/127.0
+    mat.emit = int(attribs.get('LUMINANCE', 0))/127.0
     
-    if hasattr(mat, 'line_color') and 'EDGE' in lineDict:
+    if hasattr(mat, 'line_color'):
         # If Freestyle is enabled, set the line color as the LDraw edge color
-        edge = lineDict['EDGE']
+        edge = attribs['EDGE']
         if edge[0] == '#':
             mat.line_color = hex2rgb(edge)+(255,)
         elif edge.isdigit():
@@ -176,33 +193,33 @@ def createMaterial(name, line, extraAttribs={}):
         else:
             warnings.warn("Malformed edge color reference: {0}".format(edge))
 
-    if "CHROME" in line:
+    if "CHROME" in flags:
         mat.ambient = 0.25
         mat.diffuse_intensity = 0.6
         mat.raytrace_mirror.use = True
         mat.specular_intensity = 1.4
         mat.roughness = 0.01
         mat.raytrace_mirror.reflect_factor = 0.3
-    elif "PEARLESCENT" in line:
+    elif "PEARLESCENT" in flags:
         mat.ambient = 0.22
         mat.diffuse_intensity = 0.6
         mat.raytrace_mirror.use = True
         mat.specular_intensity = 0.1
         mat.roughness = 0.32
         mat.raytrace_mirror.reflect_factor = 0.07
-    elif "RUBBER" in line:
+    elif "RUBBER" in flags:
         mat.ambient = 0.5
         mat.specular_intensity = 0.19
         mat.specular_slope = 0.235
         mat.diffuse_intensity = 0.6
-    elif "MATTE_METALLIC" in line:
+    elif "MATTE_METALLIC" in flags:
         mat.raytrace_mirror.use = True
         mat.raytrace_mirror.reflect_factor = 0.84
         mat.diffuse_intensity = 0.844
         mat.specular_intensity = 0.5
         mat.specular_hardness = 40
         mat.gloss_factor = 0.725
-    elif "METAL" in line:
+    elif "METAL" in flags:
         mat.raytrace_mirror.use = True
         mat.raytrace_mirror.reflect_factor = 0.9
         mat.diffuse_fresnel = 0.93
@@ -210,52 +227,6 @@ def createMaterial(name, line, extraAttribs={}):
         mat.darkness = 0.771
         mat.specular_intensity = 1.473
         mat.specular_hardness = 292
-    elif "MATERIAL" in line:
-        materialLine = line[line.index("MATERIAL")+1:]
-        materialDict = genDict(materialLine, ['VALUE', 'FRACTION', 'SIZE', 'MINSIZE', 'MAXSIZE'])
-        # Only these two are official, and they are nearly the same.
-        if "GLITTER" in materialLine or "SPECKLE" in materialLine:
-            # I could use a particle system to make it more realistic,
-            # but it would be VERY slow. Use procedural texture for now.
-            # TODO There has to be a better way.
-            if mat.name in bpy.data.textures:
-                tex = bpy.data.textures[mat.name]
-            else:
-                tex = bpy.data.textures.new(mat.name, "STUCCI")
-            value = hex2rgb(materialDict["VALUE"])
-            value = [v/255.0 for v in value]
-            # Alpha value is the same for the whole material, so the
-            # texture can "inherit" this value, but ignore luminance, since
-            # Blender textures only have color and transparency.
-            fraction = float(materialDict["FRACTION"])
-            tex.use_color_ramp = True
-            tex.color_ramp.interpolation = "CONSTANT"
-            tex.color_ramp.elements[0].color = value+[alpha/255.0]
-            tex.color_ramp.elements[1].color = [0, 0, 0, 0]
-            tex.color_ramp.elements.new(fraction).color = value+[0]
-            if "SIZE" not in materialDict:
-                # Hmm.... I don't know what to do here.
-                size = int(materialDict["MINSIZE"])+int(materialDict["MAXSIZE"])
-                size /= 2.0
-            else:
-                size = float(materialDict["SIZE"])
-            size *= 0.025
-            tex.noise_scale = size
-            slot = mat.texture_slots.add()
-            slot.texture = tex
-            mat.use_textures[0] = True
-
-        if alpha < 255:
-            mat.raytrace_mirror.use = True
-            mat.ambient = 0.3
-            mat.diffuse_intensity = 0.8
-            mat.raytrace_mirror.reflect_factor = 0.1
-            mat.specular_intensity = 0.3
-            mat.raytrace_transparency.ior = 1.40
-        else:
-            mat.ambient = 0.1
-            mat.specular_intensity = 0.2
-
     elif alpha < 255:
         mat.raytrace_mirror.use = True
         mat.ambient = 0.3
@@ -267,6 +238,38 @@ def createMaterial(name, line, extraAttribs={}):
         mat.ambient = 0.1
         mat.specular_intensity = 0.2
         mat.diffuse_intensity = 1.0
+
+    # Only these two are official, and they are nearly the same.
+    if materialName == "GLITTER" or materialName == "SPECKLE":
+        # I could use a particle system to make it more realistic,
+        # but it would be VERY slow. Use procedural texture for now.
+        # TODO There has to be a better way.
+        if mat.name in bpy.data.textures:
+            tex = bpy.data.textures[mat.name]
+        else:
+            tex = bpy.data.textures.new(mat.name, "STUCCI")
+        value = hex2rgb(materialAttribs["VALUE"])
+        value = [v/255.0 for v in value]
+        # Alpha value is the same for the whole material, so the
+        # texture can "inherit" this value, but ignore luminance, since
+        # Blender textures only have color and transparency.
+        fraction = float(materialAttribs["FRACTION"])
+        tex.use_color_ramp = True
+        tex.color_ramp.interpolation = "CONSTANT"
+        tex.color_ramp.elements[0].color = value+[alpha/255.0]
+        tex.color_ramp.elements[1].color = [0, 0, 0, 0]
+        tex.color_ramp.elements.new(fraction).color = value+[0]
+        if "SIZE" not in materialAttribs:
+            # Hmm.... I don't know what to do here.
+            size = int(materialAttribs["MINSIZE"])+int(materialAttribs["MAXSIZE"])
+            size /= 2.0
+        else:
+            size = float(materialAttribs["SIZE"])
+        size *= 0.025
+        tex.noise_scale = size
+        slot = mat.texture_slots.add()
+        slot.texture = tex
+        mat.use_textures[0] = True
 
     if alpha < 255:
         mat.use_transparency = True
