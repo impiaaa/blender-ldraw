@@ -432,11 +432,16 @@ def lineType1(line, oldObj, oldMaterial, bfc, subfiles={}, merge=False):
             if not matrixEqual(newMatrix, newObj.matrix_local):
                 warnings.warn("Object matrix has changed, model may have errors!")
 
+def findVert(bm, loc):
+    for bv in bm.verts:
+        if bv.co == loc: return bv
+    return bm.verts.new(loc)
+
 def poly(line, bm, bfc):
     # helper function for making polygons
     vertices = []
     for i in range(0, len(line), 3):
-        vertices.append(bm.verts.new(mathutils.Vector((float(line[i]), float(line[i+1]), float(line[i+2])))))
+        vertices.append(findVert(bm, mathutils.Vector((float(line[i]), float(line[i+1]), float(line[i+2])))))
     if bfc.winding == CW:
         vertices.reverse()
     return bm.faces.new(vertices)
@@ -489,8 +494,18 @@ def readLine(line, o, material, bfc, bm, subfiles={}, readLater=None, merge=Fals
             newFace.material_index = 0
         bfc.invertNext = False
         return True
-    elif command in ('2', '5'):
-        # Line and conditional line
+    elif command == '2':
+        # Line
+        line = line.split()
+        verts = [findVert(bm, mathutils.Vector((float(line[2]), float(line[3]), float(line[4])))),
+                 findVert(bm, mathutils.Vector((float(line[5]), float(line[6]), float(line[7]))))]
+        newEdge = bm.edges.get(verts, None)
+        if newEdge is None: newEdge = bm.edges.new(verts)
+        newEdge.smooth = False
+        bfc.invertNext = False
+        return False
+    elif command == '5':
+        # Conditional line
         # Not supported
         bfc.invertNext = False
         return False
@@ -614,9 +629,16 @@ def readFile(fname, bfc, first=False, smooth=False, material=None, transform=Fal
         # causes a scene update after
         #bpy.ops.object.shade_smooth()
 
-    bmesh.ops.remove_doubles(bm, verts=list(bm.verts), dist=0.0001)
+    if SMOOTH and isAPart(fname) and False:
+        setMeshSmooth(bm)
+        mod = obj.modifiers.new("EdgeSplit", 'EDGE_SPLIT')
+        mod.use_edge_angle = False
+        mod.use_edge_sharp = True
+    
+    bmesh.ops.remove_doubles(bm, verts=list(bm.verts), dist=0.1)
     bm.to_mesh(mesh)
     bm.free()
+
     if first:
         bpy.context.window_manager.progress_begin(0, total)
         for idx, readLater in enumerate(readLaterLines):
