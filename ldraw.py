@@ -131,6 +131,15 @@ def isAPart(name):
     else:
         return False
 
+def srgbToLinearrgb(c):
+	if c < 0.04045:
+		return 0.0 if c < 0.0 else (c * (1.0 / 12.92))
+	else:
+		return ((c + 0.055) * (1.0 / 1.055)) ** 2.4
+
+def srgbToLinearrgbV3V3(srgb):
+    return srgbToLinearrgb(srgb[0]), srgbToLinearrgb(srgb[1]), srgbToLinearrgb(srgb[2])
+
 ### IMPORTER ###
 
 def createMaterial(name, line, extraAttribs={}):
@@ -170,7 +179,7 @@ def createMaterial(name, line, extraAttribs={}):
         mat = bpy.data.materials.new(name)
     MATERIALS[materialId] = mat.name
     
-    mat.diffuse_color = value
+    mat.diffuse_color = srgbToLinearrgbV3V3(value)
     # We can ignore the edge color value
     alpha = int(attribs.get('ALPHA', 255))
     mat.alpha = alpha/255.0
@@ -180,7 +189,7 @@ def createMaterial(name, line, extraAttribs={}):
         # If Freestyle is enabled, set the line color as the LDraw edge color
         edge = attribs['EDGE']
         if edge[0] == '#':
-            mat.line_color = hex2rgb(edge)+(255,)
+            mat.line_color = srgbToLinearrgbV3V3(hex2rgb(edge))+(1.0,)
         elif edge.isdigit():
             # References another color
             edge = int(edge)
@@ -248,17 +257,16 @@ def createMaterial(name, line, extraAttribs={}):
             tex = bpy.data.textures[mat.name]
         else:
             tex = bpy.data.textures.new(mat.name, "STUCCI")
-        value = hex2rgb(materialAttribs["VALUE"])
-        value = [v/255.0 for v in value]
+        value = srgbToLinearrgbV3V3(hex2rgb(materialAttribs["VALUE"]))
         # Alpha value is the same for the whole material, so the
         # texture can "inherit" this value, but ignore luminance, since
         # Blender textures only have color and transparency.
         fraction = float(materialAttribs["FRACTION"])
         tex.use_color_ramp = True
         tex.color_ramp.interpolation = "CONSTANT"
-        tex.color_ramp.elements[0].color = value+[alpha/255.0]
+        tex.color_ramp.elements[0].color = value+(alpha/255.0,)
         tex.color_ramp.elements[1].color = [0, 0, 0, 0]
-        tex.color_ramp.elements.new(fraction).color = value+[0]
+        tex.color_ramp.elements.new(fraction).color = value+(0.0,)
         if "SIZE" not in materialAttribs:
             # Hmm.... I don't know what to do here.
             size = int(materialAttribs["MINSIZE"])+int(materialAttribs["MAXSIZE"])
