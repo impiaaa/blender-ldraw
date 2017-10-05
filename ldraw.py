@@ -142,9 +142,7 @@ def srgbToLinearrgbV3V3(srgb):
 
 ### IMPORTER ###
 
-def createMaterial(name, line, extraAttribs={}):
-    global MATERIALS
-    
+def parseColorAttributes(line, extraAttribs={}):
     if 'MATERIAL' in line:
         matIndex = line.index("MATERIAL")
         materialName = line[matIndex+1]
@@ -152,24 +150,46 @@ def createMaterial(name, line, extraAttribs={}):
         materialLine = line[matIndex+2:]
         line = line[:matIndex]
         materialAttribs, materialFlags = parseColorLine(materialLine,
-            set(['VALUE', 'ALPHA', 'LUMINANCE', 'FRACTION', 'VFRACTION', 'SIZE', 'MINSIZE', 'MAXSIZE']))
+            {'VALUE', 'ALPHA', 'LUMINANCE', 'FRACTION', 'VFRACTION', 'SIZE', 'MINSIZE', 'MAXSIZE'})
     else:
         materialName = None
+        materialAttribs, materialFlags = None, None
 
     attribs, flags = parseColorLine(line,
-        set(['CODE', 'VALUE', 'EDGE', 'ALPHA', 'LUMINANCE']),
-        set(['CHROME', 'PEARLESCENT', 'RUBBER', 'MATTE_METALLIC', 'METAL']))
+        {'CODE', 'VALUE', 'EDGE', 'ALPHA', 'LUMINANCE'}, # expect a value after
+        {'CHROME', 'PEARLESCENT', 'RUBBER', 'MATTE_METALLIC', 'METAL'}) # expect only one
     attribs.update(extraAttribs)
+    
+    return attribs, flags, materialName, materialAttribs, materialFlags
+
+def doMaterialFreestyle(mat, attribs):
+    edge = attribs['EDGE']
+    if edge[0] == '#':
+        mat.line_color = srgbToLinearrgbV3V3(hex2rgb(edge))+(1.0,)
+    elif edge.isdigit():
+        # References another color
+        edge = int(edge)
+        if edge in MATERIALS:
+            mat.line_color = MATERIALS[edge].diffuse_color
+        else:
+            # TODO: The color may not have been defined yet, so we should
+            # postpone edge color lookups until the end
+            warnings.warn("Undefined color {0}".format(edge))
+    else:
+        warnings.warn("Malformed edge color reference: {0}".format(edge))
+
+def createMaterial(name, line, extraAttribs={}):
+    global MATERIALS
+    
+    attribs, flags, materialName, materialAttribs, materialFlags = parseColorAttributes(line, extraAttribs)
     
     del line
     
-    value = hex2rgb(attribs['VALUE'])
+    value = srgbToLinearrgbV3V3(hex2rgb(attribs['VALUE']))
     
     materialId = attribs['CODE']
     if materialId.isdigit():
         materialId = int(materialId)
-        #if materialId == 24:
-        #    bpy.data.linestyes[0].color = value
         if materialId in (16, 24):
             return None # Not allowed to use these colors directly
     
@@ -177,30 +197,23 @@ def createMaterial(name, line, extraAttribs={}):
         mat = bpy.data.materials[name]
     else:
         mat = bpy.data.materials.new(name)
-    MATERIALS[materialId] = mat.name
+    MATERIALS[materialId] = mat
     
-    mat.diffuse_color = srgbToLinearrgbV3V3(value)
-    # We can ignore the edge color value
+    mat.diffuse_color = value
     alpha = int(attribs.get('ALPHA', 255))
     mat.alpha = alpha/255.0
-    mat.emit = int(attribs.get('LUMINANCE', 0))/127.0
     
     if hasattr(mat, 'line_color'):
         # If Freestyle is enabled, set the line color as the LDraw edge color
-        edge = attribs['EDGE']
-        if edge[0] == '#':
-            mat.line_color = srgbToLinearrgbV3V3(hex2rgb(edge))+(1.0,)
-        elif edge.isdigit():
-            # References another color
-            edge = int(edge)
-            if edge in MATERIALS:
-                mat.line_color = bpy.data.materials[MATERIALS[edge]].diffuse_color
-            else:
-                # TODO: The color may not have been defined yet, so we should
-                # postpone edge color lookups until the end
-                warnings.warn("Undefined color {0}".format(edge))
-        else:
-            warnings.warn("Malformed edge color reference: {0}".format(edge))
+        doMaterialFreestyle(mat, attribs)
+    
+    doMaterialInternal(mat, alpha, attribs, flags, materialName, materialAttribs, materialFlags)
+    #doMaterialCycles(mat, value, alpha, attribs, flags, materialName, materialAttribs, materialFlags)
+    
+    return mat
+
+def doMaterialInternal(mat, alpha, attribs, flags, materialName, materialAttribs, materialFlags):
+    mat.emit = int(attribs.get('LUMINANCE', 0))/127.0
 
     if "CHROME" in flags:
         mat.ambient = 0.25
@@ -283,7 +296,54 @@ def createMaterial(name, line, extraAttribs={}):
         mat.use_transparency = True
         mat.transparency_method = "RAYTRACE"
 
-    return mat
+def doMaterialCycles(mat, value, alpha, attribs, flags, materialName, materialAttribs, materialFlags):
+    mat.use_nodes = True
+    tree = mat.node_tree
+    tree.nodes.clear()
+    shout = tree.nodes.new('ShaderNodeOutputMaterial')
+    if "CHROME" in flags:
+        pass
+    elif "PEARLESCENT" in flags:
+        pass
+    elif "RUBBER" in flags:
+        pass
+    elif "MATTE_METALLIC" in flags:
+        pass
+    elif "METAL" in flags:
+        pass
+    elif alpha < 224:
+        mix = tree.nodes.new('ShaderNodeMixShader')
+        mix.inputs['Fac'].default_value = alpha/2047.0
+        
+        refr = tree.nodes.new('ShaderNodeBsdfRefraction')
+        refr.inputs['Color'].default_value = value+(1.0,)
+        refr.inputs['Roughness'].default_value = 0.0
+        refr.inputs['IOR'].default_value = 1.40
+        tree.links.new(refr.outputs['BSDF'], mix.inputs[1])
+        
+        gloss = tree.nodes.new('ShaderNodeBsdfGlossy')
+        gloss.inputs['Color'].default_value = (1.0,1.0,1.0,1.0)
+        gloss.inputs['Roughness'].default_value = 0.0
+        tree.links.new(gloss.outputs['BSDF'], mix.inputs[2])
+        
+        tree.links.new(mix.outputs['Shader'], shout.inputs['Surface'])
+    elif alpha < 255:
+        pass
+    else:
+        mix = tree.nodes.new('ShaderNodeMixShader')
+        mix.inputs['Fac'].default_value = 0.0625
+        
+        diff = tree.nodes.new('ShaderNodeBsdfDiffuse')
+        diff.inputs['Color'].default_value = value+(1.0,)
+        diff.inputs['Roughness'].default_value = 0.0
+        tree.links.new(diff.outputs['BSDF'], mix.inputs[1])
+        
+        gloss = tree.nodes.new('ShaderNodeBsdfGlossy')
+        gloss.inputs['Color'].default_value = (1.0,1.0,1.0,1.0)
+        gloss.inputs['Roughness'].default_value = 0.0
+        tree.links.new(gloss.outputs['BSDF'], mix.inputs[2])
+        
+        tree.links.new(mix.outputs['Shader'], shout.inputs['Surface'])
 
 def lineType0(line, bfc, someObj=None):
     # Comment or meta-command
@@ -339,13 +399,13 @@ def colorReference(s):
         if materialId in (16, 24):
             return materialId, None
         elif materialId in MATERIALS:
-            return materialId, bpy.data.materials[MATERIALS[materialId]]
+            return materialId, MATERIALS[materialId]
         else:
             warnings.warn("Undefined color {0}".format(materialId))
     elif s.startswith("0x2"):
         # Direct color
         if s in MATERIALS:
-            return None, bpy.data.materials[MATERIALS[s]]
+            return None, MATERIALS[s]
         else:
             return None, createMaterial(s, [], {"VALUE": s[3:], "CODE": s})
     else:
