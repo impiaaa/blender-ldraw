@@ -752,7 +752,7 @@ class IMPORT_OT_ldraw(bpy.types.Operator):
     smoothProp = bpy.props.BoolProperty(name="Smooth", description="Automatically shade round primitives (cyl, sph, con, tor) smooth", default=True)
     hiResProp = bpy.props.BoolProperty(name="Hi-Res prims", description="Force use of high-resolution primitives, if possible", default=False)
     lightProp = bpy.props.BoolProperty(name="Lights from model", description="Create lamps in place of light.dat references", default=True)
-    scaleProp = bpy.props.FloatProperty(name="Seam width", description="The amout of space in-between individual parts", default=0.001, min=0.0, max=1.0, precision=3)
+    scaleProp = bpy.props.FloatProperty(name="Seam width", description="The amout of space in-between individual parts", default=0.0066667, min=0.0, max=1.0, precision=3)
     mergePartsProp = bpy.props.BoolProperty(name="Merge parts", description="Automatically combine sub-parts into single objects", default=True)
 
     def execute(self, context):
