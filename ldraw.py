@@ -563,7 +563,7 @@ def readLine(line, o, material, bfc, bm, subfiles={}, readLater=None, merge=Fals
         if newEdge is None: newEdge = bm.edges.new(verts)
         newEdge.smooth = False
         bfc.invertNext = False
-        return False
+        return True
     elif command == '5':
         # Conditional line
         # Not supported
@@ -689,11 +689,11 @@ def readFile(fname, bfc, first=False, smooth=False, material=None, transform=Fal
         # causes a scene update after
         #bpy.ops.object.shade_smooth()
 
-    if SMOOTH and isAPart(fname) and False:
+    if SMOOTH and isAPart(fname):
         setMeshSmooth(bm)
-        mod = obj.modifiers.new("EdgeSplit", 'EDGE_SPLIT')
-        mod.use_edge_angle = False
-        mod.use_edge_sharp = True
+        mesh.use_auto_smooth = True
+        mesh.auto_smooth_angle = math.pi
+        mesh.show_edge_sharp = True
     
     bmesh.ops.remove_doubles(bm, verts=list(bm.verts), dist=0.1)
     bm.to_mesh(mesh)
@@ -733,7 +733,7 @@ def main(fname, context=None, transform=False):
     MATERIALS = {}
     IGNOREOBJECTS = set()
     readFile(os.path.join(LDRAWDIR, "LDConfig.ldr"), BFCContext(), first=False)
-    obj = readFile(fname, BFCContext(), first=True, transform=transform)
+    obj = readFile(fname, BFCContext(), first=True, transform=transform, merge=(MERGEPARTS and isAPart(fname)))
     bpy.context.scene.objects.link(obj)
     context.scene.update()
     print('LDraw "{0}" imported in {1:.4} seconds.'.format(fname, time.time()-start))
