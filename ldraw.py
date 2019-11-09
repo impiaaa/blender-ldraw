@@ -2,7 +2,7 @@ bl_info = {
     'name': "Import LDraw model format",
     'author': "Spencer Alves (impiaaa)",
     'version': (1, 0),
-    'blender': (2, 70, 0),
+    'blender': (2, 80, 0),
     'location': "File > Import > Import LDraw",
     'description': "This script imports LDraw model files.",
     # used for warning icon and text in addons panel
@@ -25,17 +25,13 @@ Usage:
     file. Make sure that the LDraw dir field is set to your LDraw install
     directory, chose the options you'd like on the left (more help in the
     tooltips), and click Import.
-
-Changelog:
-    1.0
-        Initial re-release for Blender 2.60
 """
 
 import bpy, bpy.props, bpy.utils, mathutils, bmesh
 import sys, os, math, time, warnings
 
 DEFAULTMAT = mathutils.Matrix.Scale(0.025, 4)
-DEFAULTMAT *= mathutils.Matrix.Rotation(math.pi/-2.0, 4, 'X') # -90 degree rotation
+DEFAULTMAT @= mathutils.Matrix.Rotation(math.pi/-2.0, 4, 'X') # -90 degree rotation
 THRESHOLD = 0.0001
 CW = 0
 CCW = 1
@@ -81,7 +77,7 @@ def copyAndApplyMaterial(o, mat):
         else:
             d = copyAndApplyMaterial(c, None)
             d.ldrawInheritsColor = False
-        bpy.context.scene.objects.link(d)
+        bpy.context.scene.collection.objects.link(d)
         d.parent = p
     return p
 
@@ -122,7 +118,6 @@ def setMeshSmooth(me):
 
 partsCache = set()
 def isAPart(name):
-    global partsCache
     if name in partsCache:
         return True
     elif os.path.exists(os.path.join(LDRAWDIR, "parts", name)):
@@ -199,15 +194,16 @@ def createMaterial(name, line, extraAttribs={}):
         mat = bpy.data.materials.new(name)
     MATERIALS[materialId] = mat
     
-    mat.diffuse_color = value
+    mat.use_nodes = False
+    
     alpha = int(attribs.get('ALPHA', 255))
-    mat.alpha = alpha/255.0
+    mat.diffuse_color = value+(alpha/255.0,)
     
     if hasattr(mat, 'line_color'):
         # If Freestyle is enabled, set the line color as the LDraw edge color
         doMaterialFreestyle(mat, attribs)
     
-    doMaterialInternal(mat, alpha, attribs, flags, materialName, materialAttribs, materialFlags)
+    #doMaterialInternal(mat, alpha, attribs, flags, materialName, materialAttribs, materialFlags)
     #doMaterialCycles(mat, value, alpha, attribs, flags, materialName, materialAttribs, materialFlags)
     
     return mat
@@ -350,13 +346,11 @@ def lineType0(line, bfc, someObj=None):
     if len(line) < 2:
         return
     if line[1] in ('WRITE', 'PRINT'):
-        #Blender.Draw.PupMenu("Message in file:%t|"+(' '.join(line[2:])))
         pass
     elif line[1] == 'CLEAR':
         #bpy.ops.wm.redraw_timer()
         pass
     elif line[1] == 'PAUSE':
-        #Blender.Draw.PupMenu("Paused.%t")
         pass
     elif line[1] == 'SAVE':
         #bpy.ops.render.render()
@@ -445,7 +439,7 @@ def lineType1(line, oldObj, oldMaterial, bfc, subfiles={}, merge=False):
     if fname in subfiles:
         newObj = readFile(fname, BFCContext(bfc), subfiles=subfiles, material=material, merge=merge)
     elif fname == 'light.dat' and USELIGHTS:
-        l = bpy.data.lamps.new(fname)
+        l = bpy.data.lights.new(fname)
         newObj = bpy.data.objects.new(fname, l)
 
         l.color = material.diffuse_color
@@ -456,7 +450,7 @@ def lineType1(line, oldObj, oldMaterial, bfc, subfiles={}, merge=False):
     if newObj:
         if isAPart(fname):
             if not ((fname[0] == 's') and (fname[1] in ('/', '\\'))):
-                newMatrix *= GAPMAT
+                newMatrix @= GAPMAT
         newObj.ldrawInheritsColor = materialId in (16, 24)
         if merge:
             oldToNewMatMap = {0: 0}
@@ -486,7 +480,7 @@ def lineType1(line, oldObj, oldMaterial, bfc, subfiles={}, merge=False):
             #bpy.data.objects.remove(newObj)
             #bpy.data.meshes.remove(childData)
         else:
-            bpy.context.scene.objects.link(newObj)
+            bpy.context.scene.collection.objects.link(newObj)
             newObj.parent = oldObj
             newObj.matrix_local = newMatrix
             if not matrixEqual(newMatrix, newObj.matrix_local):
@@ -693,7 +687,6 @@ def readFile(fname, bfc, first=False, smooth=False, material=None, transform=Fal
         setMeshSmooth(bm)
         mesh.use_auto_smooth = True
         mesh.auto_smooth_angle = math.pi
-        mesh.show_edge_sharp = True
     
     bmesh.ops.remove_doubles(bm, verts=list(bm.verts), dist=0.1)
     bm.to_mesh(mesh)
@@ -728,32 +721,63 @@ def readFile(fname, bfc, first=False, smooth=False, material=None, transform=Fal
 
 def main(fname, context=None, transform=False):
     global MATERIALS, IGNOREOBJECTS
-    #Blender.Window.WaitCursor(1)
     start = time.time()
     MATERIALS = {}
     IGNOREOBJECTS = set()
     readFile(os.path.join(LDRAWDIR, "LDConfig.ldr"), BFCContext(), first=False)
     obj = readFile(fname, BFCContext(), first=True, transform=transform, merge=(MERGEPARTS and isAPart(fname)))
-    bpy.context.scene.objects.link(obj)
-    context.scene.update()
+    bpy.context.scene.collection.objects.link(obj)
+    context.view_layer.update()
     print('LDraw "{0}" imported in {1:.4} seconds.'.format(fname, time.time()-start))
 
-class IMPORT_OT_ldraw(bpy.types.Operator):
+### ADDON ###
+
+import bpy_extras
+
+class ImportLdraw(bpy.types.Operator, bpy_extras.io_utils.ImportHelper):
     '''Import LDraw model Operator.'''
     bl_idname = "import_scene.ldraw_dat"
     bl_label = "Import LDR/DAT/MPD"
     bl_description = "Import an LDraw model file (.dat, .ldr, .mpd)"
-    bl_options = {'REGISTER', 'UNDO'}
-
-    filepath = bpy.props.StringProperty(name="File Path", description="Filepath used for importing the LDR/DAT/MPD file", maxlen=MAXPATH, default="")
-
-    ldrawPathProp = bpy.props.StringProperty(name="LDraw directory", description="The directory in which the P and PARTS directories reside", maxlen=MAXPATH, default={"win32": "C:\\Program Files\\LDraw", "darwin": "/Library/LDraw"}.get(sys.platform, "/usr/share/ldraw"))
-    transformProp = bpy.props.BoolProperty(name="Transform", description="Transform objects to match Blender's coordinate system", default=True)
-    smoothProp = bpy.props.BoolProperty(name="Smooth", description="Automatically shade round primitives (cyl, sph, con, tor) smooth", default=True)
-    hiResProp = bpy.props.BoolProperty(name="Hi-Res prims", description="Force use of high-resolution primitives, if possible", default=False)
-    lightProp = bpy.props.BoolProperty(name="Lights from model", description="Create lamps in place of light.dat references", default=True)
-    scaleProp = bpy.props.FloatProperty(name="Seam width", description="The amout of space in-between individual parts", default=0.0066667, min=0.0, max=1.0, precision=3)
-    mergePartsProp = bpy.props.BoolProperty(name="Merge parts", description="Automatically combine sub-parts into single objects", default=True)
+    bl_options = {'PRESET', 'UNDO'}
+    
+    filename_ext = ".ldr"
+    filter_glob: bpy.props.StringProperty(
+        default="*.dat;*.ldr;*.mpd",
+        options={'HIDDEN'})
+    ldrawPathProp: bpy.props.StringProperty(
+        name="LDraw directory",
+        description="The directory in which the P and PARTS directories reside",
+        maxlen=MAXPATH,
+        default={"win32": "C:\\Program Files\\LDraw",
+                 "darwin": "/Library/LDraw"}.get(sys.platform, "/usr/share/ldraw"))
+    transformProp: bpy.props.BoolProperty(
+        name="Transform",
+        description="Transform objects to match Blender's coordinate system",
+        default=True)
+    smoothProp: bpy.props.BoolProperty(
+        name="Smooth",
+        description="Automatically shade round primitives (cyl, sph, con, tor) smooth",
+        default=True)
+    hiResProp: bpy.props.BoolProperty(
+        name="Hi-Res prims",
+        description="Force use of high-resolution primitives, if possible",
+        default=False)
+    lightProp: bpy.props.BoolProperty(
+        name="Lights from model",
+        description="Create lights in place of light.dat references",
+        default=True)
+    scaleProp: bpy.props.FloatProperty(
+        name="Seam width",
+        description="The amout of space in-between individual parts",
+        default=0.0066667,
+        min=0.0,
+        max=1.0,
+        precision=3)
+    mergePartsProp: bpy.props.BoolProperty(
+        name="Merge parts",
+        description="Automatically combine sub-parts into single objects",
+        default=True)
 
     def execute(self, context):
         global LDRAWDIR, SMOOTH, HIRES, USELIGHTS, GAPMAT, MERGEPARTS
@@ -768,22 +792,18 @@ class IMPORT_OT_ldraw(bpy.types.Operator):
         main(self.filepath, context, transform)
         return {'FINISHED'}
 
-    def invoke(self, context, event):
-        context.window_manager.fileselect_add(self)
-        return {'RUNNING_MODAL'}
 
-
-def menu_import(self, context):
-    self.layout.operator(IMPORT_OT_ldraw.bl_idname, text="LDraw Model (.dat, .mpd, .ldr)")
+def menu_func_import(self, context):
+    self.layout.operator(ImportLdraw.bl_idname, text="LDraw Model (.dat, .mpd, .ldr)")
 
 def register():
-    bpy.utils.register_module(__name__)
-    bpy.types.INFO_MT_file_import.append(menu_import)
+    bpy.utils.register_class(ImportLdraw)
+    bpy.types.TOPBAR_MT_file_import.append(menu_func_import)
     bpy.types.Object.ldrawInheritsColor = bpy.props.BoolProperty()
 
 def unregister():
-    bpy.utils.unregister_module(__name__)
-    bpy.types.INFO_MT_file_import.remove(menu_import)
+    bpy.utils.unregister_class(ImportLdraw)
+    bpy.types.TOPBAR_MT_file_import.remove(menu_func_import)
     del bpy.types.Object.ldrawInheritsColor
 
 if __name__ == "__main__":
@@ -802,3 +822,4 @@ if __name__ == "__main__":
     #finally:
     #    sys.stderr.flush()
     #    sys.stdout.flush()
+
