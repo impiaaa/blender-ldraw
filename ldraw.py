@@ -219,62 +219,43 @@ def createMaterial(name, line, extraAttribs={}):
         # If Freestyle is enabled, set the line color as the LDraw edge color
         doMaterialFreestyle(mat, attribs)
     
-    #doMaterialInternal(mat, alpha, attribs, flags, materialName, materialAttribs, materialFlags)
+    doMaterialBase(mat, alpha, attribs, flags, materialName, materialAttribs, materialFlags)
     #doMaterialCycles(mat, value, alpha, attribs, flags, materialName, materialAttribs, materialFlags)
     
     return mat
 
-def doMaterialInternal(mat, alpha, attribs, flags, materialName, materialAttribs, materialFlags):
-    mat.emit = int(attribs.get('LUMINANCE', 0))/127.0
-
+def doMaterialBase(mat, alpha, attribs, flags, materialName, materialAttribs, materialFlags):
     if "CHROME" in flags:
-        mat.ambient = 0.25
-        mat.diffuse_intensity = 0.6
-        mat.raytrace_mirror.use = True
-        mat.specular_intensity = 1.4
-        mat.roughness = 0.01
-        mat.raytrace_mirror.reflect_factor = 0.3
-    elif "PEARLESCENT" in flags:
-        mat.ambient = 0.22
-        mat.diffuse_intensity = 0.6
-        mat.raytrace_mirror.use = True
-        mat.specular_intensity = 0.1
-        mat.roughness = 0.32
-        mat.raytrace_mirror.reflect_factor = 0.07
-    elif "RUBBER" in flags:
-        mat.ambient = 0.5
-        mat.specular_intensity = 0.19
-        mat.specular_slope = 0.235
-        mat.diffuse_intensity = 0.6
-    elif "MATTE_METALLIC" in flags:
-        mat.raytrace_mirror.use = True
-        mat.raytrace_mirror.reflect_factor = 0.84
-        mat.diffuse_intensity = 0.844
-        mat.specular_intensity = 0.5
-        mat.specular_hardness = 40
-        mat.gloss_factor = 0.725
-    elif "METAL" in flags:
-        mat.raytrace_mirror.use = True
-        mat.raytrace_mirror.reflect_factor = 0.9
-        mat.diffuse_fresnel = 0.93
-        mat.diffuse_intensity = 1.0
-        mat.darkness = 0.771
-        mat.specular_intensity = 1.473
-        mat.specular_hardness = 292
-    elif alpha < 255:
-        mat.raytrace_mirror.use = True
-        mat.ambient = 0.3
-        mat.diffuse_intensity = 0.8
-        mat.raytrace_mirror.reflect_factor = 0.1
+        mat.metallic = 0.9
         mat.specular_intensity = 0.3
-        mat.raytrace_transparency.ior = 1.40
+        mat.roughness = 0.01
+    elif "PEARLESCENT" in flags:
+        mat.metallic = 0.1
+        mat.specular_intensity = 0.07
+        mat.roughness = 0.32
+    elif "RUBBER" in flags:
+        mat.metallic = 0.0
+        mat.specular_intensity = 0.0
+        mat.roughness = 1.0
+    elif "MATTE_METALLIC" in flags:
+        mat.metallic = 0.9
+        mat.specular_intensity = 0.84
+        mat.roughness = 0.725
+    elif "METAL" in flags:
+        mat.metallic = 1.0
+        mat.specular_intensity = 0.9
+        mat.roughness = 0.01
+    elif alpha < 255:
+        mat.metallic = 0.0
+        mat.specular_intensity = 0.1
+        mat.roughness = 0.0
     else:
-        mat.ambient = 0.1
-        mat.specular_intensity = 0.2
-        mat.diffuse_intensity = 1.0
+        mat.metallic = 0.0
+        mat.specular_intensity = 0.1
+        mat.roughness = 0.0
 
     # Only these two are official, and they are nearly the same.
-    if materialName == "GLITTER" or materialName == "SPECKLE":
+    if False and (materialName == "GLITTER" or materialName == "SPECKLE"):
         # I could use a particle system to make it more realistic,
         # but it would be VERY slow. Use procedural texture for now.
         # TODO There has to be a better way.
@@ -305,8 +286,8 @@ def doMaterialInternal(mat, alpha, attribs, flags, materialName, materialAttribs
         mat.use_textures[0] = True
 
     if alpha < 255:
-        mat.use_transparency = True
-        mat.transparency_method = "RAYTRACE"
+        mat.show_transparent_back = False
+        mat.blend_method = "BLEND"
 
 def doMaterialCycles(mat, value, alpha, attribs, flags, materialName, materialAttribs, materialFlags):
     mat.use_nodes = True
