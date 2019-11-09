@@ -41,11 +41,19 @@ LOWRES = False
 ### UTILITY FUNCTIONS ###
 
 def hex2rgb(hexColor):
+    """
+    >>> [round(c, 9) for c in hex2rgb("#123456")]
+    [0.070588235, 0.203921569, 0.337254902]
+    """
     if hexColor[0] == '#':
         hexColor = hexColor[1:]
     return int(hexColor[0:2], 16)/255.0, int(hexColor[2:4], 16)/255.0, int(hexColor[4:6], 16)/255.0
 
 def parseColorLine(ls, keys, flags=set()):
+    """
+    >>> parseColorLine("CODE 0 VALUE #05131D FOO".split(), {"CODE", "VALUE", "EDGE", "BAR"})
+    ({'CODE': '0', 'VALUE': '#05131D'}, set())
+    """
     d = {}
     s = set()
     for idx, val in enumerate(ls):
@@ -56,9 +64,11 @@ def parseColorLine(ls, keys, flags=set()):
     return d, s
 
 def copyAndApplyMaterial(o, mat):
-    # Copies and object AND all of its children. Links children to the current
-    # scene, but not the parent.
-    # Also recursively set mat to the 0 material slot.
+    """
+    Copies and object AND all of its children. Links children to the current
+    scene, but not the parent.
+    Also recursively set mat to the 0 material slot.
+    """
     p = o.copy()
     if mat is not None:
         if len(p.material_slots) > 0:
@@ -127,10 +137,16 @@ def isAPart(name):
         return False
 
 def srgbToLinearrgb(c):
-	if c < 0.04045:
-		return 0.0 if c < 0.0 else (c * (1.0 / 12.92))
-	else:
-		return ((c + 0.055) * (1.0 / 1.055)) ** 2.4
+    """
+    >>> round(srgbToLinearrgb(0.019607843), 6)
+    0.001518
+    >>> round(srgbToLinearrgb(0.749019608), 6)
+    0.520996
+    """
+    if c < 0.04045:
+        return 0.0 if c < 0.0 else (c * (1.0 / 12.92))
+    else:
+        return ((c + 0.055) * (1.0 / 1.055)) ** 2.4
 
 def srgbToLinearrgbV3V3(srgb):
     return srgbToLinearrgb(srgb[0]), srgbToLinearrgb(srgb[1]), srgbToLinearrgb(srgb[2])
