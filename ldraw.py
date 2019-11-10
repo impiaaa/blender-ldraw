@@ -436,12 +436,13 @@ def lineType1(line, oldObj, oldMaterial, bfc, subfiles={}, merge=False):
     if fname in subfiles:
         newObj = readFile(fname, BFCContext(bfc), subfiles=subfiles, material=material, merge=merge)
     elif fname == 'light.dat' and USELIGHTS:
-        l = bpy.data.lights.new(fname)
+        l = bpy.data.lights.new(fname, 'POINT')
         newObj = bpy.data.objects.new(fname, l)
 
-        l.color = material.diffuse_color
-        l.energy = material.alpha
-        l.shadow_method = "RAY_SHADOW"
+        if material is not None:
+            l.color = material.diffuse_color
+            l.energy = 1000*material.diffuse_color[3]
+        l.use_shadow = True
     else:
         newObj = readFile(fname, BFCContext(bfc), material=material, merge=merge or (MERGEPARTS and isAPart(fname)))
     if newObj:
@@ -449,7 +450,7 @@ def lineType1(line, oldObj, oldMaterial, bfc, subfiles={}, merge=False):
             if not ((fname[0] == 's') and (fname[1] in ('/', '\\'))):
                 newMatrix @= GAPMAT
         newObj.ldrawInheritsColor = materialId in (16, 24)
-        if merge:
+        if merge and newObj.type == 'MESH':
             oldToNewMatMap = {0: 0}
             for subMatIdx, subMaterialSlot in enumerate(newObj.material_slots):
                 if newObj.ldrawInheritsColor and subMaterialSlot.link == "OBJECT": continue
@@ -685,7 +686,6 @@ def readFile(fname, bfc, first=False, smooth=False, material=None, transform=Fal
         mesh.use_auto_smooth = True
         mesh.auto_smooth_angle = math.pi
     
-    bmesh.ops.remove_doubles(bm, verts=list(bm.verts), dist=0.1)
     bm.to_mesh(mesh)
     bm.free()
 
